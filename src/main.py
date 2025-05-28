@@ -1,18 +1,32 @@
-from fastapi import FastAPI, HTTPException
-from .chat_agent import chat_agent
-from .models import ChatRequest, FeedbackRequest
-from .feedback_tool import feedback_tool
+from fastapi import FastAPI, HTTPException, Depends
+from sqlmodel import create_engine, Session, SQLModel, select
 import uuid
 import os
+import json
 
+from .chat_agent import chat_agent
+from .models import ChatRequest
+from .user_models import User
+
+# --- Environment Variables for LangChain ---
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
 os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "polynot")
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 
+# --- Database Setup ---
+sqlite_url = f"sqlite:///users.db"
+engine = create_engine(sqlite_url, echo=True)
+
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+
 # --- FastAPI app ---
 app = FastAPI()
-
 
 # --- Predefined Scenario List ---
 PREMADE_SCENARIOS = [
@@ -39,7 +53,40 @@ PREMADE_SCENARIOS = [
     }
 ]
 
-# --- /chat endpoint ---
+# --- Startup Event: Create DB Tables ---
+@app.on_event("startup")
+def on_startup():
+    create_db_and_tables()
+
+# --- User Endpoints ---
+@app.post("/users/", response_model=User)
+def create_user(user: User, session: Session = Depends(get_session)):
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+@app.get("/users/{user_name}", response_model=User)
+def read_user(user_name: str, session: Session = Depends(get_session)):
+    statement = select(User).where(User.user_name == user_name)
+    user = session.exec(statement).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.patch("/users/{user_name}", response_model=User)
+def update_user_level(user_name: str, user_level: str, session: Session = Depends(get_session)):
+    statement = select(User).where(User.user_name == user_name)
+    user = session.exec(statement).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.user_level = user_level
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+# --- Chat Endpoint ---
 @app.post("/chat")
 def chat_endpoint(req: ChatRequest):
     # Use scenario_id if provided
@@ -83,14 +130,3 @@ def chat_endpoint(req: ChatRequest):
         "response": response
     }
 
-# --- /feedback endpoint ---
-@app.post("/feedback")
-def get_feedback(req: FeedbackRequest):
-    response = feedback_tool(
-        user_name=req.user_name,
-        user_level=req.user_level,
-        target_language=req.target_language,
-        scenario=req.scenario,
-        messages=req.messages
-    )
-    return {"response": response}

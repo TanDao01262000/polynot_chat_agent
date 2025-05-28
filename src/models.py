@@ -21,10 +21,3 @@ class Feedback(BaseModel):
     vocabulary: str
     suggestions_for_improvement: str
 
-class FeedbackRequest(BaseModel):
-    user_name: str
-    user_level: str
-    target_language: str
-    scenario: str
-    messages: list
-
