@@ -6,6 +6,8 @@ import json
 import logging
 from typing import List, Optional, Dict
 from datetime import datetime
+from sqlalchemy import inspect
+from langchain_core.messages import AIMessage
 
 from .chat_agent import chat_agent
 from .models import (
@@ -36,6 +38,18 @@ def create_db_and_tables():
     """Create database tables on startup."""
     SQLModel.metadata.create_all(engine)
     logger.info("Database tables created successfully")
+    
+    # Verify tables exist
+    with Session(engine) as session:
+        # Check if tables exist
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        logger.info(f"Created tables: {tables}")
+        
+        # Check if ConversationHistory table has the right columns
+        if "conversationhistory" in tables:
+            columns = inspector.get_columns("conversationhistory")
+            logger.info(f"ConversationHistory columns: {[col['name'] for col in columns]}")
 
 def get_session():
     """Dependency for database session."""
@@ -222,28 +236,71 @@ def get_feedback(
 ):
     """Get feedback for a conversation."""
     try:
-        # Get user and conversation history
-        user = get_user(user_name, session)
-        conversation_history = get_conversation_history(session, thread_id)
-        
-        # Get feedback
-        feedback = feedback_tool(
-            user_name=user_name,
-            user_level=user.user_level,
-            target_language=user.target_language,
-            scenario=conversation_history[0].scenario_id or "",
-            messages=[{
-                "role": msg.role,
-                "content": msg.content
-            } for msg in conversation_history]
-        )
+        # Get user from database
+        statement = select(User).where(User.user_name == user_name)
+        user = session.exec(statement).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User {user_name} not found"
+            )
 
-        return json.loads(feedback)
+        # Get conversation history from the thread
+        conversation_history = session.exec(
+            select(ConversationHistory)
+            .where(
+                ConversationHistory.thread_id == thread_id,
+                ConversationHistory.user_name == user_name
+            )
+            .order_by(ConversationHistory.timestamp)
+        ).all()
+
+        if not conversation_history:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No conversation history found for thread {thread_id}"
+            )
+
+        # Get scenario from the first message
+        scenario = conversation_history[0].scenario_id or ""
+
+        # Format messages for feedback tool
+        formatted_messages = [{
+            "role": msg.role,
+            "content": msg.content
+        } for msg in conversation_history]
+
+        # Get feedback using the feedback tool
+        feedback_response = feedback_tool.invoke({
+            "user_name": user_name,
+            "user_level": user.user_level,
+            "target_language": user.target_language,
+            "scenario": scenario,
+            "messages": formatted_messages
+        })
+
+        # Handle AIMessage response
+        if isinstance(feedback_response, AIMessage):
+            feedback_content = feedback_response.content
+        else:
+            feedback_content = str(feedback_response)
+
+        try:
+            feedback_data = json.loads(feedback_content)
+            return feedback_data
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid feedback format received"
+            )
+
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.error(f"Error getting feedback: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get feedback"
+            detail=f"Failed to get feedback: {str(e)}"
         )
 
 # --- Level Evaluation Endpoint ---
@@ -255,27 +312,70 @@ def evaluate_level(
 ):
     """Evaluate user's language level."""
     try:
-        # Get user and conversation history
-        user = get_user(user_name, session)
-        conversation_history = get_conversation_history(session, thread_id)
-        
-        # Get evaluation
-        evaluation = level_evaluator_tool(
-            user_name=user_name,
-            target_language=user.target_language,
-            scenario=conversation_history[0].scenario_id or "",
-            messages=[{
-                "role": msg.role,
-                "content": msg.content
-            } for msg in conversation_history]
-        )
+        # Get user from database
+        statement = select(User).where(User.user_name == user_name)
+        user = session.exec(statement).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User {user_name} not found"
+            )
 
-        return json.loads(evaluation)
+        # Get conversation history from the thread
+        conversation_history = session.exec(
+            select(ConversationHistory)
+            .where(
+                ConversationHistory.thread_id == thread_id,
+                ConversationHistory.user_name == user_name
+            )
+            .order_by(ConversationHistory.timestamp)
+        ).all()
+
+        if not conversation_history:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No conversation history found for thread {thread_id}"
+            )
+
+        # Get scenario from the first message
+        scenario = conversation_history[0].scenario_id or ""
+
+        # Format messages for evaluation tool
+        formatted_messages = [{
+            "role": msg.role,
+            "content": msg.content
+        } for msg in conversation_history]
+
+        # Get evaluation using the level evaluator tool
+        evaluation_response = level_evaluator_tool.invoke({
+            "user_name": user_name,
+            "target_language": user.target_language,
+            "scenario": scenario,
+            "messages": formatted_messages
+        })
+
+        # Handle AIMessage response
+        if isinstance(evaluation_response, AIMessage):
+            evaluation_content = evaluation_response.content
+        else:
+            evaluation_content = str(evaluation_response)
+
+        try:
+            evaluation_data = json.loads(evaluation_content)
+            return evaluation_data
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid evaluation format received"
+            )
+
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.error(f"Error evaluating level: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to evaluate level"
+            detail=f"Failed to evaluate level: {str(e)}"
         )
 
 # --- Helper Functions ---
