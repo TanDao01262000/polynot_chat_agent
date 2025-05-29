@@ -16,6 +16,8 @@ import json
 
 # --- Environment setup ---
 load_dotenv(override=True)
+print("OPENAI_API_KEY exists:", bool(os.getenv("OPENAI_API_KEY")))
+print("OPENAI_API_KEY length:", len(os.getenv("OPENAI_API_KEY", "")) if os.getenv("OPENAI_API_KEY") else 0)
 
 # --- LangGraph setup ---
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)

@@ -1,7 +1,12 @@
 from langchain_openai import ChatOpenAI
 from langchain.tools import tool
+from dotenv import load_dotenv
+import os
 
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+# Load environment variables first
+load_dotenv(override=True)
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 @tool("feedback_tool")
 def feedback_tool(

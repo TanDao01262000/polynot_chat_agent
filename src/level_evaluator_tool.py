@@ -10,7 +10,7 @@ from sqlmodel import create_engine
 sqlite_url = f"sqlite:///users.db"
 engine = create_engine(sqlite_url, echo=True)
 
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 # Define CEFR levels for comparison
 CEFR_LEVELS = {
