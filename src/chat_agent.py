@@ -10,20 +10,54 @@ from .level_evaluator_tool import level_evaluator_tool, get_user_level_tool
 import sqlite3
 import getpass
 import os
-from typing import List
+from typing import List, Dict
 import uuid
 import json
 
 # --- Environment setup ---
 load_dotenv(override=True)
-print("OPENAI_API_KEY exists:", bool(os.getenv("OPENAI_API_KEY")))
-print("OPENAI_API_KEY length:", len(os.getenv("OPENAI_API_KEY", "")) if os.getenv("OPENAI_API_KEY") else 0)
 
 # --- LangGraph setup ---
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 sqlite_conn = sqlite3.connect("checkpoint.sqlite", check_same_thread=False)
 memory = SqliteSaver(sqlite_conn)
-tools = [get_user_level_tool]  # Only keep the level check tool
+tools = [get_user_level_tool, level_evaluator_tool]  # Add level_evaluator_tool
+
+def evaluate_user_level(state: CustomState) -> Dict:
+    """Evaluate user's level and update if improved."""
+    try:
+        # Get the last 10 messages for evaluation
+        recent_messages = state["messages"][-10:] if len(state["messages"]) > 10 else state["messages"]
+        
+        # Call the level evaluator tool
+        evaluation_result = level_evaluator_tool(
+            user_name=state["user_name"],
+            target_language=state["target_language"],
+            scenario=state["scenario"],
+            messages=recent_messages
+        )
+        
+        # Parse the result
+        result = json.loads(evaluation_result)
+        
+        if result.get("success") and result.get("should_update"):
+            return {
+                "level_updated": True,
+                "old_level": state["user_level"],
+                "new_level": result["estimated_level"],
+                "justification": result["justification"]
+            }
+        
+        return {
+            "level_updated": False,
+            "current_level": state["user_level"],
+            "evaluation": result.get("justification", "No evaluation available")
+        }
+    except Exception as e:
+        return {
+            "level_updated": False,
+            "error": str(e)
+        }
 
 def format_feedback(feedback_json: str) -> str:
     """Format the JSON feedback into a readable message."""

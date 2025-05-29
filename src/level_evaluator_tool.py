@@ -10,7 +10,7 @@ from sqlmodel import create_engine
 sqlite_url = f"sqlite:///users.db"
 engine = create_engine(sqlite_url, echo=True)
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
 # Define CEFR levels for comparison
 CEFR_LEVELS = {
@@ -133,31 +133,3 @@ def level_evaluator_tool(
             "justification": "Unable to properly evaluate level from the conversation.",
             "should_update": False
         })
-
-@tool("get_user_level_tool")
-def get_user_level_tool(user_name: str) -> str:
-    """
-    Get the user's current language proficiency level from the database.
-    Returns a JSON object with 'level' and 'status'.
-    """
-    try:
-        with Session(engine) as session:
-            statement = select(User).where(User.user_name == user_name)
-            user = session.exec(statement).first()
-            
-            if not user:
-                return json.dumps({
-                    "success": False,
-                    "message": f"User {user_name} not found"
-                })
-            
-            return json.dumps({
-                "success": True,
-                "level": user.user_level,
-                "message": f"Current level: {user.user_level}"
-            })
-    except Exception as e:
-        return json.dumps({
-            "success": False,
-            "message": f"Error getting user level: {str(e)}"
-        }) 
