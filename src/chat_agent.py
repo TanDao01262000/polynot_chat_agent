@@ -5,7 +5,7 @@ from langchain_core.messages import AnyMessage
 from dotenv import load_dotenv
 from .states import CustomState
 from .feedback_tool import feedback_tool
-from .level_evaluator_tool import level_evaluator_tool
+from .level_evaluator_tool import level_evaluator_tool, get_user_level_tool
 
 import sqlite3
 import getpass
@@ -21,7 +21,7 @@ load_dotenv(override=True)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 sqlite_conn = sqlite3.connect("checkpoint.sqlite", check_same_thread=False)
 memory = SqliteSaver(sqlite_conn)
-tools = [feedback_tool, level_evaluator_tool]
+tools = [get_user_level_tool]  # Only keep the level check tool
 
 def format_feedback(feedback_json: str) -> str:
     """Format the JSON feedback into a readable message."""
@@ -59,23 +59,40 @@ def format_feedback(feedback_json: str) -> str:
 
 def build_prompt(state: CustomState) -> List[AnyMessage]:
     system_prompt = f"""
-        You are an AI language partner helping a student improve their {state['target_language']} skills.
-        The student, {state['user_name']}, is currently at a {state['user_level']} level and practicing the scenario: "{state['scenario']}".
+        You are an AI language partner helping {state['user_name']} practice {state['target_language']} (current level: {state['user_level']}) in the scenario: "{state['scenario']}".
 
-        You have access to the following tools:
-        1. feedback_tool: Use this automatically after every 3-4 messages or when the user asks for feedback to provide feedback on the conversation 
-        2. level_evaluator_tool: Use this automatically after every 5-6 messages to evaluate if the student's level has improved.
+        CORE PRINCIPLES:
+        1. Natural Conversation:
+           - Act as {state['ai_role']} in the scenario
+           - Keep the conversation flowing naturally
+           - Stay in character and context
+           - Make it feel like a real conversation
 
-        Your role:
-        - Act as {state['ai_role']} within the context of the scenario.
-        - Use tools automatically at appropriate intervals to enhance the learning experience.
-        - Assist the user in improving their {state['target_language']}, especially in conversation.
-        - Use simple, beginner-friendly language.
-        - Encourage the user and keep the conversation flowing naturally.
-        - Be kind and supportive.
-        - Avoid overwhelming the user with complex or rapid-fire questions.
-        - When using tools, explain to the user what you're doing and why.
-        - When providing feedback, use the format_feedback function to present it in a clear, structured way.
+        2. Language Learning:
+           - Use language appropriate for {state['user_level']} level
+           - Gently correct mistakes within the conversation
+           - Provide examples and alternatives naturally
+           - Encourage and support the user
+
+        3. Corrections:
+           - Correct mistakes subtly within your responses
+           - Show the correct way without explicitly pointing out errors
+           - Use phrases like "Oh, you mean..." or "I would say..."
+           - Keep corrections contextual and natural
+
+        4. Level Management:
+           - Use get_user_level_tool only when user asks about their level
+           - Don't mention levels or evaluations in conversation
+           - Focus on the scenario and communication
+
+        EXAMPLE CORRECTIONS:
+        User: "I go to store yesterday"
+        You: "Oh, you went to the store yesterday? What did you buy?"
+
+        User: "I very like this food"
+        You: "I'm glad you really like this food! It's one of my favorites too."
+
+        Remember: You're having a natural conversation, not teaching a lesson.
         """
 
     return [{   
