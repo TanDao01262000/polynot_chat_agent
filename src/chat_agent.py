@@ -7,8 +7,7 @@ from .states import CustomState
 from .feedback_tool import feedback_tool
 
 import sqlite3
-import getpass
-import os
+
 from typing import List
 import uuid
 

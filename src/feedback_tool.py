@@ -1,5 +1,8 @@
 from langchain_openai import ChatOpenAI
 from langchain.tools import tool
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
