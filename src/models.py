@@ -18,6 +18,28 @@ class User(SQLModel, table=True):
     target_language: str = Field(description="Language being learned")
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
+class PremadeScenario(SQLModel, table=True):
+    """Model for storing system-wide premade conversation scenarios."""
+    id: str = Field(primary_key=True, description="Unique scenario identifier")
+    ai_role: str = Field(description="Role of the AI in the conversation")
+    scenario: str = Field(description="Description of the conversation scenario")
+    target_language: str = Field(description="Language for the conversation")
+    user_level: UserLevel = Field(description="Target CEFR level")
+    is_active: bool = Field(default=True, description="Whether the scenario is active")
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+class CustomScenario(SQLModel, table=True):
+    """Model for storing user-created conversation scenarios."""
+    id: str = Field(primary_key=True, description="Unique scenario identifier")
+    user_name: str = Field(index=True, description="Username of the creator")
+    ai_role: str = Field(description="Role of the AI in the conversation")
+    scenario: str = Field(description="Description of the conversation scenario")
+    target_language: str = Field(description="Language for the conversation")
+    user_level: UserLevel = Field(description="Target CEFR level")
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    is_active: bool = Field(default=True, description="Whether the scenario is active")
+
 class ChatRequest(SQLModel):
     """Request model for chat interactions."""
     user_name: str = Field(description="Username of the chat participant")
