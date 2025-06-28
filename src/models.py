@@ -10,6 +10,9 @@ class UserLevel(str, Enum):
     B2 = "B2"
     C1 = "C1"
     C2 = "C2"
+    
+    def __str__(self):
+        return self.value
 
 class User(SQLModel, table=True):
     """User model for storing language learner information."""

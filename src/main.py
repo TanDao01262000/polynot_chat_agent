@@ -7,15 +7,13 @@ for user management, conversation history, feedback, and level evaluation.
 """
 
 from fastapi import FastAPI, HTTPException, Depends, status
-from sqlmodel import create_engine, Session, SQLModel, select
 import uuid
 import os
 import json
 import logging
 from typing import List, Optional, Dict
 from datetime import datetime
-from sqlalchemy import inspect
-from langchain_core.messages import AIMessage
+from supabase import create_client, Client
 
 from .chat_agent import chat_agent
 from .models import (
@@ -42,54 +40,50 @@ os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "polynot")
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 
-# Database configuration using SQLite
-sqlite_url = f"sqlite:///users.db"
-engine = create_engine(sqlite_url, echo=True)
+# Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in environment variables")
+
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+logger.info("Supabase client initialized successfully")
+
+# ============================================================================
+# Database Helper Functions
+# ============================================================================
 
 def create_db_and_tables():
     """
     Initialize database tables on application startup.
     Creates all necessary tables and verifies their structure.
     """
-    SQLModel.metadata.create_all(engine)
-    logger.info("Database tables created successfully")
-    
-    # Initialize premade scenarios if they don't exist
-    with Session(engine) as session:
-        # Check if premade scenarios exist
-        existing_scenarios = session.exec(select(PremadeScenario)).all()
+    try:
+        # Test Supabase connection
+        response = supabase.table("users").select("count", count="exact").limit(1).execute()
+        logger.info("Supabase connection successful")
+        
+        # Initialize premade scenarios if they don't exist
+        scenarios_response = supabase.table("premade_scenarios").select("*").execute()
+        existing_scenarios = scenarios_response.data
+        
         if not existing_scenarios:
             logger.info("Initializing premade scenarios...")
             for scenario_data in INITIAL_PREMADE_SCENARIOS:
-                scenario = PremadeScenario(
-                    id=scenario_data["id"],
-                    ai_role=scenario_data["ai_role"],
-                    scenario=scenario_data["scenario"],
-                    target_language=scenario_data["target_language"],
-                    user_level=scenario_data["user_level"],
-                    created_at=datetime.now().isoformat(),
-                    updated_at=datetime.now().isoformat()
-                )
-                session.add(scenario)
-            session.commit()
+                supabase.table("premade_scenarios").insert(scenario_data).execute()
             logger.info("Premade scenarios initialized successfully")
-        
-        # Verify tables exist and have correct structure
-        inspector = inspect(engine)
-        tables = inspector.get_table_names()
-        logger.info(f"Created tables: {tables}")
-        
-        if "conversationhistory" in tables:
-            columns = inspector.get_columns("conversationhistory")
-            logger.info(f"ConversationHistory columns: {[col['name'] for col in columns]}")
+        else:
+            logger.info(f"Found {len(existing_scenarios)} existing premade scenarios")
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {str(e)}")
+        raise Exception(f"Database initialization failed: {str(e)}")
 
-def get_session():
-    """
-    Database session dependency for FastAPI endpoints.
-    Provides a session for database operations and ensures proper cleanup.
-    """
-    with Session(engine) as session:
-        yield session
+def get_supabase():
+    """Dependency for Supabase client."""
+    return supabase
 
 # ============================================================================
 # FastAPI Application Setup
@@ -165,13 +159,13 @@ def on_startup():
 # ============================================================================
 
 @app.post("/users/", response_model=User, status_code=status.HTTP_201_CREATED)
-def create_user(user: User, session: Session = Depends(get_session)):
+def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
     """
     Create a new user in the system.
     
     Args:
         user: User model containing username, level, and target language
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         Created user object
@@ -180,17 +174,26 @@ def create_user(user: User, session: Session = Depends(get_session)):
         HTTPException: If user creation fails
     """
     try:
-        db_user = User(
-            user_name=user.user_name,
-            user_level=user.user_level,
-            target_language=user.target_language,
-            created_at=datetime.now().isoformat()
-        )
-        session.add(db_user)
-        session.commit()
-        session.refresh(db_user)
-        logger.info(f"Created new user: {user.user_name}")
-        return db_user
+        # Convert enum to string value
+        user_level_str = user.user_level.value if hasattr(user.user_level, 'value') else str(user.user_level)
+        
+        user_data = {
+            "user_name": user.user_name,
+            "user_level": user_level_str,
+            "target_language": user.target_language,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        response = supabase_client.table("users").insert(user_data).execute()
+        
+        if response.data:
+            logger.info(f"Created new user: {user.user_name}")
+            return response.data[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create user"
+            )
     except Exception as e:
         logger.error(f"Error creating user: {str(e)}")
         raise HTTPException(
@@ -199,44 +202,63 @@ def create_user(user: User, session: Session = Depends(get_session)):
         )
 
 @app.get("/users/{user_name}", response_model=User)
-def get_user(user_name: str, session: Session = Depends(get_session)):
+def get_user(user_name: str, supabase_client: Client = Depends(get_supabase)):
     """Get user by username."""
-    statement = select(User).where(User.user_name == user_name)
-    user = session.exec(statement).first()
-    if not user:
+    try:
+        response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
+        
+        if response.data:
+            return response.data[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting user: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get user"
         )
-    return user
 
 @app.patch("/users/{user_name}", response_model=User)
 def update_user_level(
     user_name: str,
     user_level: UserLevel,
-    session: Session = Depends(get_session)
+    supabase_client: Client = Depends(get_supabase)
 ):
     """Update user's language level."""
-    statement = select(User).where(User.user_name == user_name)
-    user = session.exec(statement).first()
-    if not user:
+    try:
+        # Convert enum to string value
+        user_level_str = user_level.value if hasattr(user_level, 'value') else str(user_level)
+        
+        response = supabase_client.table("users").update({"user_level": user_level_str}).eq("user_name", user_name).execute()
+        
+        if response.data:
+            logger.info(f"Updated user level for {user_name} to {user_level_str}")
+            return response.data[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating user: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update user"
         )
-    user.user_level = user_level
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    logger.info(f"Updated user level for {user_name} to {user_level}")
-    return user
 
 # ============================================================================
 # Chat System Endpoints
 # ============================================================================
 
 @app.post("/chat")
-def chat_endpoint(req: ChatRequest, session: Session = Depends(get_session)):
+def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supabase)):
     """
     Handle chat interactions between users and AI partners.
     
@@ -250,7 +272,7 @@ def chat_endpoint(req: ChatRequest, session: Session = Depends(get_session)):
     
     Args:
         req: ChatRequest containing user input and context
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         Dict containing thread_id and AI response
@@ -260,13 +282,13 @@ def chat_endpoint(req: ChatRequest, session: Session = Depends(get_session)):
     """
     try:
         # Get user from database
-        statement = select(User).where(User.user_name == req.user_name)
-        user = session.exec(statement).first()
-        if not user:
+        user_response = supabase_client.table("users").select("*").eq("user_name", req.user_name).execute()
+        if not user_response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
+        user = user_response.data[0]
 
         # Get scenario configuration
         scenario = get_scenario_config(req, user)
@@ -278,7 +300,7 @@ def chat_endpoint(req: ChatRequest, session: Session = Depends(get_session)):
 
         # Store user message
         user_message = store_message(
-            session,
+            supabase_client,
             req.thread_id,
             req.user_name,
             "user",
@@ -291,7 +313,7 @@ def chat_endpoint(req: ChatRequest, session: Session = Depends(get_session)):
 
         # Store AI response
         ai_message = store_message(
-            session,
+            supabase_client,
             req.thread_id,
             req.user_name,
             "assistant",
@@ -303,6 +325,8 @@ def chat_endpoint(req: ChatRequest, session: Session = Depends(get_session)):
             "thread_id": req.thread_id,
             "response": response
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}")
         raise HTTPException(
@@ -318,7 +342,7 @@ def chat_endpoint(req: ChatRequest, session: Session = Depends(get_session)):
 def get_feedback(
     user_name: str,
     thread_id: str,
-    session: Session = Depends(get_session)
+    supabase_client: Client = Depends(get_supabase)
 ):
     """
     Get detailed feedback for a conversation.
@@ -332,7 +356,7 @@ def get_feedback(
     Args:
         user_name: Username of the participant
         thread_id: Conversation thread identifier
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         Dict containing conversation feedback
@@ -342,50 +366,37 @@ def get_feedback(
     """
     try:
         # Get user from database
-        statement = select(User).where(User.user_name == user_name)
-        user = session.exec(statement).first()
-        if not user:
+        user_response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
+        if not user_response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User {user_name} not found"
             )
+        user = user_response.data[0]
 
         # Get conversation history from the thread
-        conversation_history = session.exec(
-            select(ConversationHistory)
-            .where(
-                ConversationHistory.thread_id == thread_id,
-                ConversationHistory.user_name == user_name
-            )
-            .order_by(ConversationHistory.timestamp)
-        ).all()
-
-        if not conversation_history:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No conversation history found for thread {thread_id}"
-            )
+        conversation_history = get_conversation_history(supabase_client, thread_id)
 
         # Get scenario from the first message
-        scenario = conversation_history[0].scenario_id or ""
+        scenario = conversation_history[0].get("scenario_id", "") if conversation_history else ""
 
         # Format messages for feedback tool
         formatted_messages = [{
-            "role": msg.role,
-            "content": msg.content
+            "role": msg["role"],
+            "content": msg["content"]
         } for msg in conversation_history]
 
         # Get feedback using the feedback tool
         feedback_response = feedback_tool.invoke({
             "user_name": user_name,
-            "user_level": user.user_level,
-            "target_language": user.target_language,
+            "user_level": user["user_level"],
+            "target_language": user["target_language"],
             "scenario": scenario,
             "messages": formatted_messages
         })
 
         # Handle AIMessage response
-        if isinstance(feedback_response, AIMessage):
+        if hasattr(feedback_response, 'content'):
             feedback_content = feedback_response.content
         else:
             feedback_content = str(feedback_response)
@@ -399,8 +410,8 @@ def get_feedback(
                 detail="Invalid feedback format received"
             )
 
-    except HTTPException as he:
-        raise he
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting feedback: {str(e)}")
         raise HTTPException(
@@ -412,21 +423,21 @@ def get_feedback(
 def evaluate_level(
     user_name: str,
     thread_id: str,
-    session: Session = Depends(get_session)
+    supabase_client: Client = Depends(get_supabase)
 ):
     """
     Evaluate user's language level based on conversation.
     
-    Process: \n
-        1. Retrieve user and conversation history
-        2. Format messages for evaluation
-        3. Generate level assessment using AI
-        4. Return evaluation results
+    Process:
+    1. Retrieve user and conversation history
+    2. Format messages for evaluation
+    3. Generate level assessment using AI
+    4. Return evaluation results
     
-    Args: \n
+    Args:
         user_name: Username of the participant
         thread_id: Conversation thread identifier
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         Dict containing level evaluation
@@ -436,49 +447,36 @@ def evaluate_level(
     """
     try:
         # Get user from database
-        statement = select(User).where(User.user_name == user_name)
-        user = session.exec(statement).first()
-        if not user:
+        user_response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
+        if not user_response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User {user_name} not found"
             )
+        user = user_response.data[0]
 
         # Get conversation history from the thread
-        conversation_history = session.exec(
-            select(ConversationHistory)
-            .where(
-                ConversationHistory.thread_id == thread_id,
-                ConversationHistory.user_name == user_name
-            )
-            .order_by(ConversationHistory.timestamp)
-        ).all()
-
-        if not conversation_history:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No conversation history found for thread {thread_id}"
-            )
+        conversation_history = get_conversation_history(supabase_client, thread_id)
 
         # Get scenario from the first message
-        scenario = conversation_history[0].scenario_id or ""
+        scenario = conversation_history[0].get("scenario_id", "") if conversation_history else ""
 
         # Format messages for evaluation
         formatted_messages = [{
-            "role": msg.role,
-            "content": msg.content
+            "role": msg["role"],
+            "content": msg["content"]
         } for msg in conversation_history]
 
         # Get evaluation using the level evaluator tool
         evaluation_response = level_evaluator_tool.invoke({
             "user_name": user_name,
-            "target_language": user.target_language,
+            "target_language": user["target_language"],
             "scenario": scenario,
             "messages": formatted_messages
         })
 
         # Handle AIMessage response
-        if isinstance(evaluation_response, AIMessage):
+        if hasattr(evaluation_response, 'content'):
             evaluation_content = evaluation_response.content
         else:
             evaluation_content = str(evaluation_response)
@@ -492,8 +490,8 @@ def evaluate_level(
                 detail="Invalid evaluation format received"
             )
 
-    except HTTPException as he:
-        raise he
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error evaluating level: {str(e)}")
         raise HTTPException(
@@ -506,7 +504,7 @@ def evaluate_level(
 # ============================================================================
 
 @app.post("/scenarios/", response_model=CustomScenario, status_code=status.HTTP_201_CREATED)
-def create_custom_scenario(scenario: CustomScenario, session: Session = Depends(get_session)):
+def create_custom_scenario(scenario: CustomScenario, supabase_client: Client = Depends(get_supabase)):
     """
     Create a new custom conversation scenario.
     
@@ -517,7 +515,7 @@ def create_custom_scenario(scenario: CustomScenario, session: Session = Depends(
     
     Args:
         scenario: CustomScenario model containing scenario details
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         Created scenario object
@@ -527,9 +525,8 @@ def create_custom_scenario(scenario: CustomScenario, session: Session = Depends(
     """
     try:
         # Verify user exists
-        statement = select(User).where(User.user_name == scenario.user_name)
-        user = session.exec(statement).first()
-        if not user:
+        user_response = supabase_client.table("users").select("*").eq("user_name", scenario.user_name).execute()
+        if not user_response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
@@ -539,11 +536,32 @@ def create_custom_scenario(scenario: CustomScenario, session: Session = Depends(
         scenario.id = str(uuid.uuid4())
         scenario.created_at = datetime.now().isoformat()
         
-        session.add(scenario)
-        session.commit()
-        session.refresh(scenario)
-        logger.info(f"Created new custom scenario: {scenario.id} by {scenario.user_name}")
-        return scenario
+        # Convert enum to string value
+        user_level_str = scenario.user_level.value if hasattr(scenario.user_level, 'value') else str(scenario.user_level)
+        
+        scenario_data = {
+            "id": scenario.id,
+            "user_name": scenario.user_name,
+            "ai_role": scenario.ai_role,
+            "scenario": scenario.scenario,
+            "target_language": scenario.target_language,
+            "user_level": user_level_str,
+            "created_at": scenario.created_at,
+            "is_active": scenario.is_active
+        }
+        
+        response = supabase_client.table("custom_scenarios").insert(scenario_data).execute()
+        
+        if response.data:
+            logger.info(f"Created new custom scenario: {scenario.id} by {scenario.user_name}")
+            return response.data[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create scenario"
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating custom scenario: {str(e)}")
         raise HTTPException(
@@ -552,15 +570,11 @@ def create_custom_scenario(scenario: CustomScenario, session: Session = Depends(
         )
 
 @app.get("/scenarios/{user_name}", response_model=List[CustomScenario])
-def get_user_scenarios(user_name: str, session: Session = Depends(get_session)):
+def get_user_scenarios(user_name: str, supabase_client: Client = Depends(get_supabase)):
     """Get all custom scenarios created by a user."""
     try:
-        statement = select(CustomScenario).where(
-            CustomScenario.user_name == user_name,
-            CustomScenario.is_active == True
-        )
-        scenarios = session.exec(statement).all()
-        return scenarios
+        response = supabase_client.table("custom_scenarios").select("*").eq("user_name", user_name).eq("is_active", True).execute()
+        return response.data
     except Exception as e:
         logger.error(f"Error fetching user scenarios: {str(e)}")
         raise HTTPException(
@@ -569,22 +583,21 @@ def get_user_scenarios(user_name: str, session: Session = Depends(get_session)):
         )
 
 @app.delete("/scenarios/{scenario_id}")
-def delete_custom_scenario(scenario_id: str, session: Session = Depends(get_session)):
+def delete_custom_scenario(scenario_id: str, supabase_client: Client = Depends(get_supabase)):
     """Soft delete a custom scenario by setting is_active to False."""
     try:
-        statement = select(CustomScenario).where(CustomScenario.id == scenario_id)
-        scenario = session.exec(statement).first()
-        if not scenario:
+        response = supabase_client.table("custom_scenarios").update({"is_active": False}).eq("id", scenario_id).execute()
+        
+        if response.data:
+            logger.info(f"Deleted custom scenario: {scenario_id}")
+            return {"message": "Scenario deleted successfully"}
+        else:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Scenario not found"
             )
-        
-        scenario.is_active = False
-        session.add(scenario)
-        session.commit()
-        logger.info(f"Deleted custom scenario: {scenario_id}")
-        return {"message": "Scenario deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting scenario: {str(e)}")
         raise HTTPException(
@@ -600,7 +613,7 @@ def delete_custom_scenario(scenario_id: str, session: Session = Depends(get_sess
 def get_premade_scenarios(
     user_level: Optional[UserLevel] = None,
     target_language: Optional[str] = None,
-    session: Session = Depends(get_session)
+    supabase_client: Client = Depends(get_supabase)
 ):
     """
     Get all active premade scenarios, optionally filtered by level and language.
@@ -608,21 +621,26 @@ def get_premade_scenarios(
     Args:
         user_level: Optional CEFR level filter
         target_language: Optional language filter
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         List of premade scenarios
     """
     try:
-        query = select(PremadeScenario).where(PremadeScenario.is_active == True)
+        query = supabase_client.table("premade_scenarios").select("*").eq("is_active", True)
         
         if user_level:
-            query = query.where(PremadeScenario.user_level == user_level)
+            # Convert enum to string value
+            user_level_str = user_level.value if hasattr(user_level, 'value') else str(user_level)
+            logger.info(f"Filtering by user_level: {user_level_str}")
+            query = query.eq("user_level", user_level_str)
         if target_language:
-            query = query.where(PremadeScenario.target_language == target_language)
+            logger.info(f"Filtering by target_language: {target_language}")
+            query = query.eq("target_language", target_language)
             
-        scenarios = session.exec(query).all()
-        return scenarios
+        response = query.execute()
+        logger.info(f"Found {len(response.data)} premade scenarios")
+        return response.data
     except Exception as e:
         logger.error(f"Error fetching premade scenarios: {str(e)}")
         raise HTTPException(
@@ -631,13 +649,13 @@ def get_premade_scenarios(
         )
 
 @app.post("/premade-scenarios/", response_model=PremadeScenario, status_code=status.HTTP_201_CREATED)
-def create_premade_scenario(scenario: PremadeScenario, session: Session = Depends(get_session)):
+def create_premade_scenario(scenario: PremadeScenario, supabase_client: Client = Depends(get_supabase)):
     """
     Create a new premade scenario (admin only).
     
     Args:
         scenario: PremadeScenario model containing scenario details
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         Created scenario object
@@ -650,11 +668,32 @@ def create_premade_scenario(scenario: PremadeScenario, session: Session = Depend
         scenario.created_at = datetime.now().isoformat()
         scenario.updated_at = datetime.now().isoformat()
         
-        session.add(scenario)
-        session.commit()
-        session.refresh(scenario)
-        logger.info(f"Created new premade scenario: {scenario.id}")
-        return scenario
+        # Convert enum to string value
+        user_level_str = scenario.user_level.value if hasattr(scenario.user_level, 'value') else str(scenario.user_level)
+        
+        scenario_data = {
+            "id": scenario.id,
+            "ai_role": scenario.ai_role,
+            "scenario": scenario.scenario,
+            "target_language": scenario.target_language,
+            "user_level": user_level_str,
+            "is_active": scenario.is_active,
+            "created_at": scenario.created_at,
+            "updated_at": scenario.updated_at
+        }
+        
+        response = supabase_client.table("premade_scenarios").insert(scenario_data).execute()
+        
+        if response.data:
+            logger.info(f"Created new premade scenario: {scenario.id}")
+            return response.data[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create scenario"
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating premade scenario: {str(e)}")
         raise HTTPException(
@@ -666,7 +705,7 @@ def create_premade_scenario(scenario: PremadeScenario, session: Session = Depend
 def update_premade_scenario(
     scenario_id: str,
     scenario_update: PremadeScenario,
-    session: Session = Depends(get_session)
+    supabase_client: Client = Depends(get_supabase)
 ):
     """
     Update an existing premade scenario (admin only).
@@ -674,36 +713,175 @@ def update_premade_scenario(
     Args:
         scenario_id: ID of the scenario to update
         scenario_update: Updated scenario data
-        session: Database session
+        supabase_client: Supabase client
     
     Returns:
         Updated scenario object
     """
     try:
-        statement = select(PremadeScenario).where(PremadeScenario.id == scenario_id)
-        scenario = session.exec(statement).first()
-        if not scenario:
+        # Get current scenario
+        response = supabase_client.table("premade_scenarios").select("*").eq("id", scenario_id).execute()
+        if not response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Scenario not found"
             )
         
-        # Update fields
-        for field, value in scenario_update.dict(exclude_unset=True).items():
-            setattr(scenario, field, value)
+        # Prepare update data
+        update_data = {
+            "updated_at": datetime.now().isoformat()
+        }
         
-        scenario.updated_at = datetime.now().isoformat()
-        session.add(scenario)
-        session.commit()
-        session.refresh(scenario)
-        logger.info(f"Updated premade scenario: {scenario_id}")
-        return scenario
+        # Add fields that are provided
+        if scenario_update.ai_role:
+            update_data["ai_role"] = scenario_update.ai_role
+        if scenario_update.scenario:
+            update_data["scenario"] = scenario_update.scenario
+        if scenario_update.target_language:
+            update_data["target_language"] = scenario_update.target_language
+        if scenario_update.user_level:
+            # Convert enum to string value
+            user_level_str = scenario_update.user_level.value if hasattr(scenario_update.user_level, 'value') else str(scenario_update.user_level)
+            update_data["user_level"] = user_level_str
+        if scenario_update.is_active is not None:
+            update_data["is_active"] = scenario_update.is_active
+        
+        # Update scenario
+        update_response = supabase_client.table("premade_scenarios").update(update_data).eq("id", scenario_id).execute()
+        
+        if update_response.data:
+            logger.info(f"Updated premade scenario: {scenario_id}")
+            return update_response.data[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update scenario"
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating premade scenario: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update scenario"
         )
+
+# ============================================================================
+# Health Check Endpoints
+# ============================================================================
+
+@app.get("/")
+def health_check():
+    """Health check endpoint for deployment verification."""
+    return {
+        "status": "healthy",
+        "service": "PolyNot Language Learning API",
+        "version": "1.0.0",
+        "database": "Supabase",
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/health")
+def detailed_health_check():
+    """Detailed health check with database connectivity."""
+    try:
+        # Test Supabase connection
+        response = supabase.table("users").select("count", count="exact").limit(1).execute()
+        
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "service": "PolyNot Language Learning API",
+            "version": "1.0.0",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e),
+            "service": "PolyNot Language Learning API",
+            "version": "1.0.0",
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.get("/debug/premade-scenarios")
+def debug_premade_scenarios():
+    """Debug endpoint to check premade scenarios data."""
+    try:
+        # Get all scenarios without any filters
+        response = supabase.table("premade_scenarios").select("*").execute()
+        
+        return {
+            "total_count": len(response.data),
+            "scenarios": response.data,
+            "message": "Raw data from premade_scenarios table"
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "message": "Failed to fetch premade scenarios"
+        }
+
+@app.get("/test/all-endpoints")
+def test_all_endpoints():
+    """Test endpoint to verify all API functionality."""
+    try:
+        results = {}
+        
+        # Test 1: Check database connection
+        try:
+            response = supabase.table("users").select("count", count="exact").limit(1).execute()
+            results["database_connection"] = "✅ Connected"
+        except Exception as e:
+            results["database_connection"] = f"❌ Failed: {str(e)}"
+        
+        # Test 2: Check premade scenarios
+        try:
+            response = supabase.table("premade_scenarios").select("*").execute()
+            results["premade_scenarios"] = f"✅ Found {len(response.data)} scenarios"
+        except Exception as e:
+            results["premade_scenarios"] = f"❌ Failed: {str(e)}"
+        
+        # Test 3: Check users table
+        try:
+            response = supabase.table("users").select("*").execute()
+            results["users_table"] = f"✅ Found {len(response.data)} users"
+        except Exception as e:
+            results["users_table"] = f"❌ Failed: {str(e)}"
+        
+        # Test 4: Check custom scenarios table
+        try:
+            response = supabase.table("custom_scenarios").select("*").execute()
+            results["custom_scenarios"] = f"✅ Found {len(response.data)} scenarios"
+        except Exception as e:
+            results["custom_scenarios"] = f"❌ Failed: {str(e)}"
+        
+        # Test 5: Check conversation history table
+        try:
+            response = supabase.table("conversation_history").select("*").execute()
+            results["conversation_history"] = f"✅ Found {len(response.data)} messages"
+        except Exception as e:
+            results["conversation_history"] = f"❌ Failed: {str(e)}"
+        
+        # Test 6: Test enum filtering
+        try:
+            response = supabase.table("premade_scenarios").select("*").eq("user_level", "B1").execute()
+            results["enum_filtering"] = f"✅ Found {len(response.data)} B1 scenarios"
+        except Exception as e:
+            results["enum_filtering"] = f"❌ Failed: {str(e)}"
+        
+        return {
+            "status": "Test completed",
+            "results": results,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "Test failed",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 # ============================================================================
 # Helper Functions
@@ -728,36 +906,29 @@ def get_scenario_config(req: ChatRequest, user: User) -> Optional[Dict]:
     try:
         # First check if it's a custom scenario
         if req.scenario_id:
-            with Session(engine) as session:
-                # Check custom scenarios
-                statement = select(CustomScenario).where(
-                    CustomScenario.id == req.scenario_id,
-                    CustomScenario.is_active == True
-                )
-                custom_scenario = session.exec(statement).first()
-                if custom_scenario:
-                    return {
-                        "id": custom_scenario.id,
-                        "ai_role": custom_scenario.ai_role,
-                        "scenario": custom_scenario.scenario,
-                        "target_language": custom_scenario.target_language,
-                        "user_level": custom_scenario.user_level
-                    }
-                
-                # Check premade scenarios
-                statement = select(PremadeScenario).where(
-                    PremadeScenario.id == req.scenario_id,
-                    PremadeScenario.is_active == True
-                )
-                premade_scenario = session.exec(statement).first()
-                if premade_scenario:
-                    return {
-                        "id": premade_scenario.id,
-                        "ai_role": premade_scenario.ai_role,
-                        "scenario": premade_scenario.scenario,
-                        "target_language": premade_scenario.target_language,
-                        "user_level": premade_scenario.user_level
-                    }
+            # Check custom scenarios
+            custom_response = supabase.table("custom_scenarios").select("*").eq("id", req.scenario_id).eq("is_active", True).execute()
+            if custom_response.data:
+                custom_scenario = custom_response.data[0]
+                return {
+                    "id": custom_scenario["id"],
+                    "ai_role": custom_scenario["ai_role"],
+                    "scenario": custom_scenario["scenario"],
+                    "target_language": custom_scenario["target_language"],
+                    "user_level": custom_scenario["user_level"]
+                }
+            
+            # Check premade scenarios
+            premade_response = supabase.table("premade_scenarios").select("*").eq("id", req.scenario_id).eq("is_active", True).execute()
+            if premade_response.data:
+                premade_scenario = premade_response.data[0]
+                return {
+                    "id": premade_scenario["id"],
+                    "ai_role": premade_scenario["ai_role"],
+                    "scenario": premade_scenario["scenario"],
+                    "target_language": premade_scenario["target_language"],
+                    "user_level": premade_scenario["user_level"]
+                }
 
         # If no scenario ID provided, use the request parameters
         if req.ai_role and req.scenario:
@@ -765,8 +936,8 @@ def get_scenario_config(req: ChatRequest, user: User) -> Optional[Dict]:
                 "id": str(uuid.uuid4()),
                 "ai_role": req.ai_role,
                 "scenario": req.scenario,
-                "target_language": req.target_language or user.target_language,
-                "user_level": user.user_level
+                "target_language": req.target_language or user["target_language"],
+                "user_level": user["user_level"]
             }
 
         return None
@@ -775,18 +946,18 @@ def get_scenario_config(req: ChatRequest, user: User) -> Optional[Dict]:
         return None
 
 def store_message(
-    session: Session,
+    supabase_client: Client,
     thread_id: str,
     user_name: str,
     role: str,
     content: str,
     scenario_id: Optional[str]
-) -> ConversationHistory:
+) -> Dict:
     """
     Store a message in the conversation history.
     
     Args:
-        session: Database session
+        supabase_client: Supabase client
         thread_id: Conversation thread identifier
         user_name: Username of the participant
         role: Message sender role (user/assistant)
@@ -794,50 +965,46 @@ def store_message(
         scenario_id: Associated scenario ID
     
     Returns:
-        Stored ConversationHistory object
+        Stored message data
     """
-    message = ConversationHistory(
-        thread_id=thread_id,
-        user_name=user_name,
-        message_id=str(uuid.uuid4()),
-        role=role,
-        content=content,
-        timestamp=datetime.now().isoformat(),
-        scenario_id=scenario_id
-    )
-    session.add(message)
-    session.commit()
-    return message
+    message_data = {
+        "thread_id": thread_id,
+        "user_name": user_name,
+        "message_id": str(uuid.uuid4()),
+        "role": role,
+        "content": content,
+        "timestamp": datetime.now().isoformat(),
+        "scenario_id": scenario_id
+    }
+    
+    response = supabase_client.table("conversation_history").insert(message_data).execute()
+    return response.data[0] if response.data else message_data
 
 def get_conversation_history(
-    session: Session,
+    supabase_client: Client,
     thread_id: str
-) -> List[ConversationHistory]:
+) -> List[Dict]:
     """
     Retrieve conversation history for a thread.
     
     Args:
-        session: Database session
+        supabase_client: Supabase client
         thread_id: Conversation thread identifier
     
     Returns:
-        List of ConversationHistory objects
+        List of conversation messages
     
     Raises:
         HTTPException: If no history found
     """
-    conversation_history = session.exec(
-        select(ConversationHistory)
-        .where(ConversationHistory.thread_id == thread_id)
-        .order_by(ConversationHistory.timestamp)
-    ).all()
-
-    if not conversation_history:
+    response = supabase_client.table("conversation_history").select("*").eq("thread_id", thread_id).order("timestamp").execute()
+    
+    if not response.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No conversation history found"
         )
-    return conversation_history
+    return response.data
 
 def process_chat(req: ChatRequest, scenario: Dict) -> str:
     """

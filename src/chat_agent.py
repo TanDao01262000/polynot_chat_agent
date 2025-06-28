@@ -21,8 +21,11 @@ load_dotenv(override=True)
 
 # --- LangGraph setup ---
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+# Use SQLite for LangGraph checkpoints (Supabase is used for all other database operations)
 sqlite_conn = sqlite3.connect("checkpoint.sqlite", check_same_thread=False)
 memory = SqliteSaver(sqlite_conn)
+
 tools = [get_user_level_tool, level_evaluator_tool]  # Add level_evaluator_tool
 
 def evaluate_user_level(state: CustomState) -> Dict:

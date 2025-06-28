@@ -1,14 +1,19 @@
 from langchain_openai import ChatOpenAI
 from langchain.tools import tool
 import json
-from sqlmodel import Session, select
-from .models import User
+import os
+from supabase import create_client, Client
 from langchain_core.messages import AIMessage
-from sqlmodel import create_engine
 
-# Create engine for database access
-sqlite_url = f"sqlite:///users.db"
-engine = create_engine(sqlite_url, echo=True)
+# Use the same Supabase configuration as main.py
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in environment variables")
+
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
@@ -44,15 +49,13 @@ def level_evaluator_tool(
     """
     # Get current level first
     try:
-        with Session(engine) as session:
-            statement = select(User).where(User.user_name == user_name)
-            user = session.exec(statement).first()
-            if not user:
-                return json.dumps({
-                    "success": False,
-                    "message": f"User {user_name} not found"
-                })
-            current_level = user.user_level
+        response = supabase.table("users").select("*").eq("user_name", user_name).execute()
+        if not response.data:
+            return json.dumps({
+                "success": False,
+                "message": f"User {user_name} not found"
+            })
+        current_level = response.data[0]["user_level"]
     except Exception as e:
         return json.dumps({
             "success": False,
@@ -112,14 +115,13 @@ def level_evaluator_tool(
         # If should_update is true, update the level
         if should_update:
             try:
-                with Session(engine) as session:
-                    user = session.exec(select(User).where(User.user_name == user_name)).first()
-                    if user:
-                        user.user_level = response_data["estimated_level"]
-                        session.add(user)
-                        session.commit()
-                        response_data["update_success"] = True
-                        response_data["update_message"] = f"Level updated from {current_level} to {response_data['estimated_level']}"
+                update_response = supabase.table("users").update({"user_level": response_data["estimated_level"]}).eq("user_name", user_name).execute()
+                if update_response.data:
+                    response_data["update_success"] = True
+                    response_data["update_message"] = f"Level updated from {current_level} to {response_data['estimated_level']}"
+                else:
+                    response_data["update_success"] = False
+                    response_data["update_message"] = "Failed to update user level"
             except Exception as e:
                 response_data["update_success"] = False
                 response_data["update_message"] = f"Error updating level: {str(e)}"
@@ -141,21 +143,20 @@ def get_user_level_tool(user_name: str) -> str:
     Returns a JSON object with 'level' and 'status'.
     """
     try:
-        with Session(engine) as session:
-            statement = select(User).where(User.user_name == user_name)
-            user = session.exec(statement).first()
-            
-            if not user:
-                return json.dumps({
-                    "success": False,
-                    "message": f"User {user_name} not found"
-                })
-            
+        response = supabase.table("users").select("*").eq("user_name", user_name).execute()
+        
+        if not response.data:
             return json.dumps({
-                "success": True,
-                "level": user.user_level,
-                "message": f"Current level: {user.user_level}"
+                "success": False,
+                "message": f"User {user_name} not found"
             })
+        
+        user_level = response.data[0]["user_level"]
+        return json.dumps({
+            "success": True,
+            "level": user_level,
+            "message": f"Current level: {user_level}"
+        })
     except Exception as e:
         return json.dumps({
             "success": False,
