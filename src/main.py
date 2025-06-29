@@ -18,7 +18,7 @@ from supabase import create_client, Client
 from .chat_agent import chat_agent
 from .models import (
     ChatRequest, Feedback, ConversationHistory, User,
-    UserLevel, CustomScenario, PremadeScenario
+    UserLevel, CustomScenario, PremadeScenario, CreateCustomScenarioRequest
 )
 from .feedback_tool import feedback_tool
 from .level_evaluator_tool import level_evaluator_tool
@@ -174,13 +174,33 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
         HTTPException: If user creation fails
     """
     try:
-        # Convert enum to string value
-        user_level_str = user.user_level.value if hasattr(user.user_level, 'value') else str(user.user_level)
+        # Validate user_name
+        if not user.user_name or not user.user_name.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Username cannot be empty"
+            )
+        
+        # Validate target_language
+        if not user.target_language or not user.target_language.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Target language cannot be empty"
+            )
+        
+        # Validate user_level
+        try:
+            user_level_str = user.user_level.value if hasattr(user.user_level, 'value') else str(user.user_level)
+        except (ValueError, AttributeError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid user_level: {user.user_level}. Must be one of: {[level.value for level in UserLevel]}"
+            )
         
         user_data = {
-            "user_name": user.user_name,
+            "user_name": user.user_name.strip(),
             "user_level": user_level_str,
-            "target_language": user.target_language,
+            "target_language": user.target_language.strip(),
             "created_at": datetime.now().isoformat()
         }
         
@@ -194,6 +214,8 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create user"
             )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating user: {str(e)}")
         raise HTTPException(
@@ -302,10 +324,11 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
         user_message = store_message(
             supabase_client,
             req.thread_id,
-            req.user_name,
+            user["id"],
             "user",
             req.user_input,
-            req.scenario_id
+            req.scenario_id,
+            "premade" if req.scenario_id in ["coffee_shop", "job_interview", "first_date", "travel_planning", "doctor_visit", "shopping"] else "custom"
         )
 
         # Process chat with AI
@@ -315,10 +338,11 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
         ai_message = store_message(
             supabase_client,
             req.thread_id,
-            req.user_name,
+            user["id"],
             "assistant",
             response,
-            req.scenario_id
+            req.scenario_id,
+            "premade" if req.scenario_id in ["coffee_shop", "job_interview", "first_date", "travel_planning", "doctor_visit", "shopping"] else "custom"
         )
 
         return {
@@ -503,8 +527,8 @@ def evaluate_level(
 # Custom Scenario Management
 # ============================================================================
 
-@app.post("/scenarios/", response_model=CustomScenario, status_code=status.HTTP_201_CREATED)
-def create_custom_scenario(scenario: CustomScenario, supabase_client: Client = Depends(get_supabase)):
+@app.post("/scenarios/", status_code=status.HTTP_201_CREATED)
+def create_custom_scenario(scenario: CreateCustomScenarioRequest, supabase_client: Client = Depends(get_supabase)):
     """
     Create a new custom conversation scenario.
     
@@ -514,7 +538,7 @@ def create_custom_scenario(scenario: CustomScenario, supabase_client: Client = D
     3. Store scenario in database
     
     Args:
-        scenario: CustomScenario model containing scenario details
+        scenario: CreateCustomScenarioRequest model containing scenario details
         supabase_client: Supabase client
     
     Returns:
@@ -524,38 +548,49 @@ def create_custom_scenario(scenario: CustomScenario, supabase_client: Client = D
         HTTPException: If user not found or creation fails
     """
     try:
-        # Verify user exists
+        # Verify user exists and get user_id
         user_response = supabase_client.table("users").select("*").eq("user_name", scenario.user_name).execute()
         if not user_response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
+        user = user_response.data[0]
+        logger.info(f"Found user: {user['user_name']} with ID: {user['id']}")
 
         # Generate unique ID for the scenario
-        scenario.id = str(uuid.uuid4())
-        scenario.created_at = datetime.now().isoformat()
+        scenario_id = str(uuid.uuid4())
+        created_at = datetime.now().isoformat()
         
-        # Convert enum to string value
-        user_level_str = scenario.user_level.value if hasattr(scenario.user_level, 'value') else str(scenario.user_level)
+        # Convert string user_level to UserLevel enum
+        try:
+            user_level_enum = UserLevel(scenario.user_level)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid user_level: {scenario.user_level}. Must be one of: {[level.value for level in UserLevel]}"
+            )
         
         scenario_data = {
-            "id": scenario.id,
-            "user_name": scenario.user_name,
+            "id": scenario_id,
+            "user_id": user["id"],  # Use user_id instead of user_name
             "ai_role": scenario.ai_role,
             "scenario": scenario.scenario,
             "target_language": scenario.target_language,
-            "user_level": user_level_str,
-            "created_at": scenario.created_at,
-            "is_active": scenario.is_active
+            "user_level": user_level_enum.value,  # Use enum value
+            "created_at": created_at,
+            "is_active": True
         }
         
+        logger.info(f"Attempting to insert scenario data: {scenario_data}")
         response = supabase_client.table("custom_scenarios").insert(scenario_data).execute()
         
         if response.data:
-            logger.info(f"Created new custom scenario: {scenario.id} by {scenario.user_name}")
+            logger.info(f"Created new custom scenario: {scenario_id} by {scenario.user_name}")
+            # Return raw database response instead of trying to validate against model
             return response.data[0]
         else:
+            logger.error("No data returned from scenario creation")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create scenario"
@@ -564,17 +599,33 @@ def create_custom_scenario(scenario: CustomScenario, supabase_client: Client = D
         raise
     except Exception as e:
         logger.error(f"Error creating custom scenario: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create custom scenario"
         )
 
-@app.get("/scenarios/{user_name}", response_model=List[CustomScenario])
+@app.get("/scenarios/{user_name}")
 def get_user_scenarios(user_name: str, supabase_client: Client = Depends(get_supabase)):
     """Get all custom scenarios created by a user."""
     try:
-        response = supabase_client.table("custom_scenarios").select("*").eq("user_name", user_name).eq("is_active", True).execute()
+        # First get the user to get their user_id
+        user_response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
+        if not user_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        user = user_response.data[0]
+        
+        # Then get scenarios using user_id
+        response = supabase_client.table("custom_scenarios").select("*").eq("user_id", user["id"]).eq("is_active", True).execute()
+        # Return raw database response instead of trying to validate against model
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching user scenarios: {str(e)}")
         raise HTTPException(
@@ -948,10 +999,11 @@ def get_scenario_config(req: ChatRequest, user: User) -> Optional[Dict]:
 def store_message(
     supabase_client: Client,
     thread_id: str,
-    user_name: str,
+    user_id: str,
     role: str,
     content: str,
-    scenario_id: Optional[str]
+    scenario_id: Optional[str],
+    scenario_type: Optional[str] = None
 ) -> Dict:
     """
     Store a message in the conversation history.
@@ -959,22 +1011,24 @@ def store_message(
     Args:
         supabase_client: Supabase client
         thread_id: Conversation thread identifier
-        user_name: Username of the participant
+        user_id: User ID of the participant
         role: Message sender role (user/assistant)
         content: Message content
         scenario_id: Associated scenario ID
+        scenario_type: Type of scenario ('premade' or 'custom')
     
     Returns:
         Stored message data
     """
     message_data = {
         "thread_id": thread_id,
-        "user_name": user_name,
+        "user_id": user_id,
         "message_id": str(uuid.uuid4()),
         "role": role,
         "content": content,
         "timestamp": datetime.now().isoformat(),
-        "scenario_id": scenario_id
+        "scenario_id": scenario_id,
+        "scenario_type": scenario_type
     }
     
     response = supabase_client.table("conversation_history").insert(message_data).execute()

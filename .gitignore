@@ -2,3 +2,4 @@
 my_env/
 .venv/
 __pycache__/
+docs_and_tests/
