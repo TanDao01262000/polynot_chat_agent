@@ -933,6 +933,26 @@ def test_all_endpoints():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+# ============================================================================
+# Get Chat History
+# ============================================================================  
+
+@app.get("/threads/{thread_id}/messages")
+def get_messages_by_thread(thread_id: str, supabase_client: Client = Depends(get_supabase)):
+    """
+        Get all messages from a thread
+    """
+
+    try:
+        messages = get_conversation_history(supabase_client, thread_id)
+        return messages
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error fetching messages for thread {thread_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Fail to fetch message history")
+
+
 
 # ============================================================================
 # Helper Functions
