@@ -9,3 +9,9 @@ class CustomState(AgentState):
     ai_role: str
     scenario: str
     target_language: str
+    partner_name: str
+    personality: str
+    background: str
+    communication_style: str
+    expertise: str
+    interests: str

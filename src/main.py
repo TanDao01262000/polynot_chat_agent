@@ -2,7 +2,7 @@
 PolyNot Language Learning API
 ----------------------------
 A FastAPI-based application for language learning conversations with AI partners.
-The system supports both predefined and custom conversation scenarios, with features
+The system supports both predefined and custom conversation partners, with features
 for user management, conversation history, feedback, and level evaluation.
 """
 
@@ -14,11 +14,13 @@ import logging
 from typing import List, Optional, Dict
 from datetime import datetime
 from supabase import create_client, Client
+from uuid import UUID
+from dotenv import load_dotenv
 
 from .chat_agent import chat_agent
 from .models import (
     ChatRequest, Feedback, ConversationHistory, User,
-    UserLevel, CustomScenario, PremadeScenario, CreateCustomScenarioRequest
+    UserLevel, Partner, CreatePartnerRequest
 )
 from .feedback_tool import feedback_tool
 from .level_evaluator_tool import level_evaluator_tool
@@ -26,6 +28,9 @@ from .level_evaluator_tool import level_evaluator_tool
 # ============================================================================
 # Configuration and Setup
 # ============================================================================
+
+# Load environment variables from .env file
+load_dotenv(override=True)
 
 # Configure logging for application-wide logging
 logging.basicConfig(
@@ -65,24 +70,24 @@ def create_db_and_tables():
         response = supabase.table("users").select("count", count="exact").limit(1).execute()
         logger.info("Supabase connection successful")
         
-        # Initialize premade scenarios if they don't exist
-        scenarios_response = supabase.table("premade_scenarios").select("*").execute()
-        existing_scenarios = scenarios_response.data
+        # Initialize premade partners if they don't exist
+        partners_response = supabase.table("partners").select("*").execute()
+        existing_partners = partners_response.data
         
-        if not existing_scenarios:
-            logger.info("Initializing premade scenarios...")
-            for scenario_data in INITIAL_PREMADE_SCENARIOS:
-                supabase.table("premade_scenarios").insert(scenario_data).execute()
-            logger.info("Premade scenarios initialized successfully")
+        if not existing_partners:
+            logger.info("Initializing premade partners...")
+            for partner_data in INITIAL_PREMADE_PARTNERS:
+                supabase.table("partners").insert(partner_data).execute()
+            logger.info("Premade partners initialized successfully")
         else:
-            logger.info(f"Found {len(existing_scenarios)} existing premade scenarios")
+            logger.info(f"Found {len(existing_partners)} existing partners")
             
     except Exception as e:
         logger.error(f"Failed to initialize database: {str(e)}")
         raise Exception(f"Database initialization failed: {str(e)}")
 
-def get_supabase():
-    """Dependency for Supabase client."""
+def get_supabase() -> Client:
+    """Dependency to get Supabase client."""
     return supabase
 
 # ============================================================================
@@ -96,52 +101,100 @@ app = FastAPI(
 )
 
 # ============================================================================
-# Initial Premade Scenarios
+# Initial Premade Partners
 # ============================================================================
 
-# Initial premade scenarios data
-INITIAL_PREMADE_SCENARIOS = [
+# Initial premade partners data
+INITIAL_PREMADE_PARTNERS = [
     {
-        "id": "coffee_shop",
+        "id": str(UUID("11111111-1111-1111-1111-111111111111")),
+        "name": "Emily Carter",
         "ai_role": "barista",
         "scenario": "Ordering a drink at a coffee shop",
         "target_language": "English",
-        "user_level": UserLevel.A2
+        "user_level": UserLevel.A2,
+        "personality": "Emily is a warm, enthusiastic barista who loves coffee and people. She's patient, friendly, and always ready to help customers find their perfect drink. She has a positive attitude and enjoys chatting with customers about their day.",
+        "background": "Emily has been working as a barista for 3 years at this popular local coffee shop. She studied hospitality in college and has a passion for coffee culture. She's originally from Seattle and loves sharing her knowledge about different coffee beans and brewing methods.",
+        "communication_style": "Emily speaks in a friendly, casual manner. She uses simple, clear language and is very patient with non-native speakers. She often asks follow-up questions to ensure she gets orders right and makes helpful suggestions.",
+        "expertise": "Emily is an expert in coffee preparation, different brewing methods, and coffee bean varieties. She knows about espresso, cappuccino, latte, Americano, and specialty drinks. She can recommend drinks based on preferences and explain coffee terminology.",
+        "interests": "Emily loves trying new coffee beans, reading about coffee culture, and experimenting with latte art. She also enjoys hiking and photography in her free time.",
+        "is_premade": True,
+        "is_active": True
     },
     {
-        "id": "job_interview",
+        "id": str(UUID("22222222-2222-2222-2222-222222222222")),
+        "name": "Michael Lee",
         "ai_role": "Hiring Manager",
         "scenario": "Job interview for a marketing assistant position",
         "target_language": "English",
-        "user_level": UserLevel.B2
+        "user_level": UserLevel.B2,
+        "personality": "Michael is a professional, experienced hiring manager who is fair and thorough in his evaluations. He's direct but encouraging, and he genuinely wants to help candidates succeed. He values preparation and clear communication.",
+        "background": "Michael has 8 years of experience in human resources and has conducted hundreds of interviews. He has a degree in Business Administration and has worked for both startups and established companies. He's currently the HR Manager at a growing marketing agency.",
+        "communication_style": "Michael speaks in a professional, formal manner appropriate for business settings. He asks clear, structured questions and provides constructive feedback. He uses business terminology and expects professional responses.",
+        "expertise": "Michael is an expert in recruitment, interviewing techniques, and evaluating candidate qualifications. He understands marketing roles, digital marketing trends, and what makes successful marketing professionals. He can assess both technical skills and cultural fit.",
+        "interests": "Michael enjoys reading business books, attending HR conferences, and mentoring young professionals. He's also interested in digital marketing trends and often attends industry events.",
+        "is_premade": True,
+        "is_active": True
     },
     {
-        "id": "first_date",
+        "id": str(UUID("33333333-3333-3333-3333-333333333333")),
+        "name": "Sophie Martin",
         "ai_role": "date partner",
         "scenario": "First date at a casual restaurant",
         "target_language": "English",
-        "user_level": UserLevel.B1
+        "user_level": UserLevel.B1,
+        "personality": "Sophie is a friendly, outgoing person who enjoys meeting new people. She's curious, has a good sense of humor, and is genuinely interested in learning about others. She's comfortable with casual conversation and likes to share stories about her life.",
+        "background": "Sophie is a 28-year-old graphic designer who moved to the city 2 years ago. She grew up in a small town and loves the energy of city life. She's been on several dates and enjoys the process of getting to know someone new.",
+        "communication_style": "Sophie speaks in a casual, friendly manner. She uses everyday language and often asks personal questions to get to know her date better. She shares personal stories and shows genuine interest in the other person's experiences.",
+        "expertise": "Sophie is knowledgeable about art, design, and creative work. She can discuss current events, popular culture, and city life. She's experienced in dating and knows how to keep conversations flowing naturally.",
+        "interests": "Sophie loves art galleries, trying new restaurants, hiking, and photography. She's also interested in travel and enjoys learning about different cultures. She's always looking for new creative projects and adventures.",
+        "is_premade": True,
+        "is_active": True
     },
     {
-        "id": "travel_planning",
+        "id": str(UUID("44444444-4444-4444-4444-444444444444")),
+        "name": "Carlos Rivera",
         "ai_role": "travel agent",
         "scenario": "Planning a vacation trip",
         "target_language": "English",
-        "user_level": UserLevel.B1
+        "user_level": UserLevel.B1,
+        "personality": "Carlos is an enthusiastic and knowledgeable travel agent who loves helping people plan their dream vacations. He's patient, detail-oriented, and genuinely excited about travel. He takes pride in finding the perfect destinations and deals for his clients.",
+        "background": "Carlos has been a travel agent for 12 years and has visited over 30 countries himself. He studied Tourism Management and has worked with clients planning all types of trips, from budget backpacking to luxury vacations. He's originally from Mexico and speaks Spanish fluently.",
+        "communication_style": "Carlos speaks in a friendly, professional manner. He asks detailed questions to understand preferences and budget. He uses travel terminology but explains unfamiliar terms. He's very thorough in his recommendations.",
+        "expertise": "Carlos is an expert in travel planning, destination knowledge, booking systems, and travel regulations. He knows about different types of accommodations, transportation options, and travel insurance. He can recommend activities and attractions for various destinations.",
+        "interests": "Carlos loves exploring new destinations, learning about different cultures, and trying local cuisines. He enjoys photography and often shares travel tips on social media. He's also interested in sustainable tourism and eco-friendly travel options.",
+        "is_premade": True,
+        "is_active": True
     },
     {
-        "id": "doctor_visit",
+        "id": str(UUID("55555555-5555-5555-5555-555555555555")),
+        "name": "Dr. Olivia Smith",
         "ai_role": "doctor",
         "scenario": "Visit to the doctor's office",
         "target_language": "English",
-        "user_level": UserLevel.B2
+        "user_level": UserLevel.B2,
+        "personality": "Dr. Smith is a caring, professional physician who puts her patients at ease. She's thorough, compassionate, and explains medical information clearly. She's patient with questions and takes time to ensure patients understand their health situation.",
+        "background": "Dr. Smith has been practicing medicine for 15 years and specializes in family medicine. She completed her medical degree at a top university and has worked in both urban and rural settings. She's known for her excellent bedside manner and clear communication.",
+        "communication_style": "Dr. Smith speaks in a professional but warm manner. She uses medical terminology but always explains terms in simple language. She asks clear questions and provides detailed but understandable explanations. She's very patient with non-native speakers.",
+        "expertise": "Dr. Smith is an expert in general medicine, common illnesses, preventive care, and patient education. She can diagnose various conditions, prescribe medications, and provide lifestyle advice. She's knowledgeable about symptoms, treatments, and when to refer to specialists.",
+        "interests": "Dr. Smith enjoys staying updated on medical research, reading medical journals, and attending conferences. She's also interested in preventive medicine and public health. In her free time, she enjoys yoga and hiking.",
+        "is_premade": True,
+        "is_active": True
     },
     {
-        "id": "shopping",
+        "id": str(UUID("66666666-6666-6666-6666-666666666666")),
+        "name": "Anna Kim",
         "ai_role": "shop assistant",
         "scenario": "Shopping for clothes",
         "target_language": "English",
-        "user_level": UserLevel.A2
+        "user_level": UserLevel.A2,
+        "personality": "Anna is a friendly, helpful shop assistant who loves fashion and helping customers find the perfect outfit. She's patient, has a good eye for style, and enjoys making customers feel confident about their choices. She's always positive and encouraging.",
+        "background": "Anna has worked in retail for 5 years and has experience in various clothing stores. She studied Fashion Design in college and has a natural talent for styling. She's worked with customers of all ages and body types, helping them find clothes that make them feel great.",
+        "communication_style": "Anna speaks in a friendly, casual manner. She uses simple, clear language and is very patient with customers who need help. She asks questions to understand preferences and makes helpful suggestions. She's encouraging and positive about fashion choices.",
+        "expertise": "Anna is an expert in fashion, clothing styles, sizing, and current trends. She knows about different fabrics, care instructions, and how to style various pieces. She can recommend outfits for different occasions and help with fit issues.",
+        "interests": "Anna loves following fashion trends, reading fashion magazines, and experimenting with different styles. She enjoys helping customers discover new looks and building their confidence. She's also interested in sustainable fashion and ethical shopping.",
+        "is_premade": True,
+        "is_active": True
     }
 ]
 
@@ -245,7 +298,7 @@ def get_user(user_name: str, supabase_client: Client = Depends(get_supabase)):
             detail="Failed to get user"
         )
 
-@app.patch("/users/{user_name}", response_model=User)
+@app.patch("/users/{user_name}")
 def update_user_level(
     user_name: str,
     user_level: UserLevel,
@@ -253,7 +306,6 @@ def update_user_level(
 ):
     """Update user's language level."""
     try:
-        # Convert enum to string value
         user_level_str = user_level.value if hasattr(user_level, 'value') else str(user_level)
         
         response = supabase_client.table("users").update({"user_level": user_level_str}).eq("user_name", user_name).execute()
@@ -269,10 +321,10 @@ def update_user_level(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating user: {str(e)}")
+        logger.error(f"Error updating user level: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update user"
+            detail="Failed to update user level"
         )
 
 # ============================================================================
@@ -286,21 +338,21 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
     
     Flow:
     1. Verify user exists
-    2. Get scenario configuration
+    2. Get partner configuration
     3. Store user message
     4. Process chat with AI
     5. Store AI response
     6. Return response to user
     
     Args:
-        req: ChatRequest containing user input and context
+        req: ChatRequest containing user input and partner_id
         supabase_client: Supabase client
     
     Returns:
         Dict containing thread_id and AI response
     
     Raises:
-        HTTPException: If user not found or scenario invalid
+        HTTPException: If user not found or partner invalid
     """
     try:
         # Get user from database
@@ -312,12 +364,12 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
             )
         user = user_response.data[0]
 
-        # Get scenario configuration
-        scenario = get_scenario_config(req, user)
-        if not scenario:
+        # Get partner configuration
+        partner = get_partner_config(req.partner_id, supabase_client)
+        if not partner:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Invalid scenario configuration"
+                detail="Partner not found"
             )
 
         # Store user message
@@ -327,12 +379,11 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
             user["id"],
             "user",
             req.user_input,
-            req.scenario_id,
-            "premade" if req.scenario_id in ["coffee_shop", "job_interview", "first_date", "travel_planning", "doctor_visit", "shopping"] else "custom"
+            req.partner_id
         )
 
         # Process chat with AI
-        response = process_chat(req, scenario)
+        response = process_chat(req, partner)
 
         # Store AI response
         ai_message = store_message(
@@ -341,8 +392,7 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
             user["id"],
             "assistant",
             response,
-            req.scenario_id,
-            "premade" if req.scenario_id in ["coffee_shop", "job_interview", "first_date", "travel_planning", "doctor_visit", "shopping"] else "custom"
+            req.partner_id
         )
 
         return {
@@ -356,6 +406,170 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process chat"
+        )
+
+# ============================================================================
+# Partner Management Endpoints
+# ============================================================================
+
+@app.post("/partners/", status_code=status.HTTP_201_CREATED)
+def create_partner(
+    user_name: str,
+    partner: CreatePartnerRequest, 
+    supabase_client: Client = Depends(get_supabase)
+):
+    """
+    Create a new custom conversation partner.
+    
+    Process:
+    1. Verify user exists
+    2. Generate unique partner ID
+    3. Store partner in database
+    
+    Args:
+        user_name: Username of the creator (query parameter)
+        partner: CreatePartnerRequest model containing partner details
+        supabase_client: Supabase client
+    
+    Returns:
+        Created partner object
+    
+    Raises:
+        HTTPException: If user not found or creation fails
+    """
+    try:
+        # Verify user exists and get user_id
+        user_response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
+        if not user_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        user = user_response.data[0]
+        logger.info(f"Found user: {user['user_name']} with ID: {user['id']}")
+
+        # Generate unique ID for the partner
+        partner_id = str(uuid.uuid4())
+        created_at = datetime.now().isoformat()
+        
+        # Convert string user_level to UserLevel enum
+        try:
+            user_level_enum = UserLevel(partner.user_level)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid user_level: {partner.user_level}. Must be one of: {[level.value for level in UserLevel]}"
+            )
+        
+        partner_data = {
+            "id": partner_id,
+            "name": partner.name,
+            "user_id": user["id"],
+            "ai_role": partner.ai_role,
+            "scenario": partner.scenario,
+            "target_language": partner.target_language,
+            "user_level": user_level_enum.value,
+            "personality": partner.personality,
+            "background": partner.background,
+            "communication_style": partner.communication_style,
+            "expertise": partner.expertise,
+            "interests": partner.interests,
+            "is_premade": False,
+            "is_active": True,
+            "created_at": created_at,
+            "updated_at": created_at
+        }
+        
+        logger.info(f"Attempting to insert partner data: {partner_data}")
+        response = supabase_client.table("partners").insert(partner_data).execute()
+        
+        if response.data:
+            logger.info(f"Created new custom partner: {partner_id} by {user_name}")
+            return response.data[0]
+        else:
+            logger.error("No data returned from partner creation")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create partner"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating custom partner: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create custom partner"
+        )
+
+@app.get("/partners/")
+def get_all_partners(
+    user_level: Optional[UserLevel] = None,
+    target_language: Optional[str] = None,
+    is_premade: Optional[bool] = None,
+    supabase_client: Client = Depends(get_supabase)
+):
+    """
+    Get all active partners, optionally filtered by level, language, and type.
+    
+    Args:
+        user_level: Optional CEFR level filter
+        target_language: Optional language filter
+        is_premade: Optional filter for premade vs custom partners
+        supabase_client: Supabase client
+    
+    Returns:
+        List of partners
+    """
+    try:
+        query = supabase_client.table("partners").select("*").eq("is_active", True)
+        
+        if user_level:
+            user_level_str = user_level.value if hasattr(user_level, 'value') else str(user_level)
+            logger.info(f"Filtering by user_level: {user_level_str}")
+            query = query.eq("user_level", user_level_str)
+        if target_language:
+            logger.info(f"Filtering by target_language: {target_language}")
+            query = query.eq("target_language", target_language)
+        if is_premade is not None:
+            logger.info(f"Filtering by is_premade: {is_premade}")
+            query = query.eq("is_premade", is_premade)
+            
+        response = query.execute()
+        logger.info(f"Found {len(response.data)} partners")
+        return response.data
+    except Exception as e:
+        logger.error(f"Error fetching partners: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch partners"
+        )
+
+@app.get("/partners/{user_name}")
+def get_user_partners(user_name: str, supabase_client: Client = Depends(get_supabase)):
+    """Get all custom partners created by a user."""
+    try:
+        # First get the user to get their user_id
+        user_response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
+        if not user_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        user = user_response.data[0]
+        
+        # Then get partners using user_id
+        response = supabase_client.table("partners").select("*").eq("user_id", user["id"]).eq("is_active", True).execute()
+        return response.data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching user partners: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch partners"
         )
 
 # ============================================================================
@@ -401,8 +615,18 @@ def get_feedback(
         # Get conversation history from the thread
         conversation_history = get_conversation_history(supabase_client, thread_id)
 
-        # Get scenario from the first message
-        scenario = conversation_history[0].get("scenario_id", "") if conversation_history else ""
+        # Get partner from the first message
+        partner_id = conversation_history[0].get("partner_id", "") if conversation_history else ""
+
+        # Get partner information to get the scenario
+        scenario = "General conversation"
+        if partner_id:
+            try:
+                partner_response = supabase_client.table("partners").select("scenario").eq("id", partner_id).execute()
+                if partner_response.data:
+                    scenario = partner_response.data[0].get("scenario", "General conversation")
+            except Exception as e:
+                logger.warning(f"Could not get partner scenario: {str(e)}")
 
         # Format messages for feedback tool
         formatted_messages = [{
@@ -482,8 +706,18 @@ def evaluate_level(
         # Get conversation history from the thread
         conversation_history = get_conversation_history(supabase_client, thread_id)
 
-        # Get scenario from the first message
-        scenario = conversation_history[0].get("scenario_id", "") if conversation_history else ""
+        # Get partner from the first message
+        partner_id = conversation_history[0].get("partner_id", "") if conversation_history else ""
+
+        # Get partner information to get the scenario
+        scenario = "General conversation"
+        if partner_id:
+            try:
+                partner_response = supabase_client.table("partners").select("scenario").eq("id", partner_id).execute()
+                if partner_response.data:
+                    scenario = partner_response.data[0].get("scenario", "General conversation")
+            except Exception as e:
+                logger.warning(f"Could not get partner scenario: {str(e)}")
 
         # Format messages for evaluation
         formatted_messages = [{
@@ -521,300 +755,6 @@ def evaluate_level(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to evaluate level: {str(e)}"
-        )
-
-# ============================================================================
-# Custom Scenario Management
-# ============================================================================
-
-@app.post("/scenarios/", status_code=status.HTTP_201_CREATED)
-def create_custom_scenario(scenario: CreateCustomScenarioRequest, supabase_client: Client = Depends(get_supabase)):
-    """
-    Create a new custom conversation scenario.
-    
-    Process:
-    1. Verify user exists
-    2. Generate unique scenario ID
-    3. Store scenario in database
-    
-    Args:
-        scenario: CreateCustomScenarioRequest model containing scenario details
-        supabase_client: Supabase client
-    
-    Returns:
-        Created scenario object
-    
-    Raises:
-        HTTPException: If user not found or creation fails
-    """
-    try:
-        # Verify user exists and get user_id
-        user_response = supabase_client.table("users").select("*").eq("user_name", scenario.user_name).execute()
-        if not user_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        user = user_response.data[0]
-        logger.info(f"Found user: {user['user_name']} with ID: {user['id']}")
-
-        # Generate unique ID for the scenario
-        scenario_id = str(uuid.uuid4())
-        created_at = datetime.now().isoformat()
-        
-        # Convert string user_level to UserLevel enum
-        try:
-            user_level_enum = UserLevel(scenario.user_level)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid user_level: {scenario.user_level}. Must be one of: {[level.value for level in UserLevel]}"
-            )
-        
-        scenario_data = {
-            "id": scenario_id,
-            "user_id": user["id"],  # Use user_id instead of user_name
-            "ai_role": scenario.ai_role,
-            "scenario": scenario.scenario,
-            "target_language": scenario.target_language,
-            "user_level": user_level_enum.value,  # Use enum value
-            "created_at": created_at,
-            "is_active": True
-        }
-        
-        logger.info(f"Attempting to insert scenario data: {scenario_data}")
-        response = supabase_client.table("custom_scenarios").insert(scenario_data).execute()
-        
-        if response.data:
-            logger.info(f"Created new custom scenario: {scenario_id} by {scenario.user_name}")
-            # Return raw database response instead of trying to validate against model
-            return response.data[0]
-        else:
-            logger.error("No data returned from scenario creation")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create scenario"
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating custom scenario: {str(e)}")
-        logger.error(f"Error type: {type(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create custom scenario"
-        )
-
-@app.get("/scenarios/{user_name}")
-def get_user_scenarios(user_name: str, supabase_client: Client = Depends(get_supabase)):
-    """Get all custom scenarios created by a user."""
-    try:
-        # First get the user to get their user_id
-        user_response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
-        if not user_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        user = user_response.data[0]
-        
-        # Then get scenarios using user_id
-        response = supabase_client.table("custom_scenarios").select("*").eq("user_id", user["id"]).eq("is_active", True).execute()
-        # Return raw database response instead of trying to validate against model
-        return response.data
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching user scenarios: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch scenarios"
-        )
-
-@app.delete("/scenarios/{scenario_id}")
-def delete_custom_scenario(scenario_id: str, supabase_client: Client = Depends(get_supabase)):
-    """Soft delete a custom scenario by setting is_active to False."""
-    try:
-        response = supabase_client.table("custom_scenarios").update({"is_active": False}).eq("id", scenario_id).execute()
-        
-        if response.data:
-            logger.info(f"Deleted custom scenario: {scenario_id}")
-            return {"message": "Scenario deleted successfully"}
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Scenario not found"
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting scenario: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete scenario"
-        )
-
-# ============================================================================
-# Premade Scenario Management
-# ============================================================================
-
-@app.get("/premade-scenarios/", response_model=List[PremadeScenario])
-def get_premade_scenarios(
-    user_level: Optional[UserLevel] = None,
-    target_language: Optional[str] = None,
-    supabase_client: Client = Depends(get_supabase)
-):
-    """
-    Get all active premade scenarios, optionally filtered by level and language.
-    
-    Args:
-        user_level: Optional CEFR level filter
-        target_language: Optional language filter
-        supabase_client: Supabase client
-    
-    Returns:
-        List of premade scenarios
-    """
-    try:
-        query = supabase_client.table("premade_scenarios").select("*").eq("is_active", True)
-        
-        if user_level:
-            # Convert enum to string value
-            user_level_str = user_level.value if hasattr(user_level, 'value') else str(user_level)
-            logger.info(f"Filtering by user_level: {user_level_str}")
-            query = query.eq("user_level", user_level_str)
-        if target_language:
-            logger.info(f"Filtering by target_language: {target_language}")
-            query = query.eq("target_language", target_language)
-            
-        response = query.execute()
-        logger.info(f"Found {len(response.data)} premade scenarios")
-        return response.data
-    except Exception as e:
-        logger.error(f"Error fetching premade scenarios: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch scenarios"
-        )
-
-@app.post("/premade-scenarios/", response_model=PremadeScenario, status_code=status.HTTP_201_CREATED)
-def create_premade_scenario(scenario: PremadeScenario, supabase_client: Client = Depends(get_supabase)):
-    """
-    Create a new premade scenario (admin only).
-    
-    Args:
-        scenario: PremadeScenario model containing scenario details
-        supabase_client: Supabase client
-    
-    Returns:
-        Created scenario object
-    """
-    try:
-        # Generate unique ID if not provided
-        if not scenario.id:
-            scenario.id = str(uuid.uuid4())
-        
-        scenario.created_at = datetime.now().isoformat()
-        scenario.updated_at = datetime.now().isoformat()
-        
-        # Convert enum to string value
-        user_level_str = scenario.user_level.value if hasattr(scenario.user_level, 'value') else str(scenario.user_level)
-        
-        scenario_data = {
-            "id": scenario.id,
-            "ai_role": scenario.ai_role,
-            "scenario": scenario.scenario,
-            "target_language": scenario.target_language,
-            "user_level": user_level_str,
-            "is_active": scenario.is_active,
-            "created_at": scenario.created_at,
-            "updated_at": scenario.updated_at
-        }
-        
-        response = supabase_client.table("premade_scenarios").insert(scenario_data).execute()
-        
-        if response.data:
-            logger.info(f"Created new premade scenario: {scenario.id}")
-            return response.data[0]
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create scenario"
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating premade scenario: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create scenario"
-        )
-
-@app.patch("/premade-scenarios/{scenario_id}", response_model=PremadeScenario)
-def update_premade_scenario(
-    scenario_id: str,
-    scenario_update: PremadeScenario,
-    supabase_client: Client = Depends(get_supabase)
-):
-    """
-    Update an existing premade scenario (admin only).
-    
-    Args:
-        scenario_id: ID of the scenario to update
-        scenario_update: Updated scenario data
-        supabase_client: Supabase client
-    
-    Returns:
-        Updated scenario object
-    """
-    try:
-        # Get current scenario
-        response = supabase_client.table("premade_scenarios").select("*").eq("id", scenario_id).execute()
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Scenario not found"
-            )
-        
-        # Prepare update data
-        update_data = {
-            "updated_at": datetime.now().isoformat()
-        }
-        
-        # Add fields that are provided
-        if scenario_update.ai_role:
-            update_data["ai_role"] = scenario_update.ai_role
-        if scenario_update.scenario:
-            update_data["scenario"] = scenario_update.scenario
-        if scenario_update.target_language:
-            update_data["target_language"] = scenario_update.target_language
-        if scenario_update.user_level:
-            # Convert enum to string value
-            user_level_str = scenario_update.user_level.value if hasattr(scenario_update.user_level, 'value') else str(scenario_update.user_level)
-            update_data["user_level"] = user_level_str
-        if scenario_update.is_active is not None:
-            update_data["is_active"] = scenario_update.is_active
-        
-        # Update scenario
-        update_response = supabase_client.table("premade_scenarios").update(update_data).eq("id", scenario_id).execute()
-        
-        if update_response.data:
-            logger.info(f"Updated premade scenario: {scenario_id}")
-            return update_response.data[0]
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update scenario"
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating premade scenario: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update scenario"
         )
 
 # ============================================================================
@@ -856,24 +796,6 @@ def detailed_health_check():
             "timestamp": datetime.now().isoformat()
         }
 
-@app.get("/debug/premade-scenarios")
-def debug_premade_scenarios():
-    """Debug endpoint to check premade scenarios data."""
-    try:
-        # Get all scenarios without any filters
-        response = supabase.table("premade_scenarios").select("*").execute()
-        
-        return {
-            "total_count": len(response.data),
-            "scenarios": response.data,
-            "message": "Raw data from premade_scenarios table"
-        }
-    except Exception as e:
-        return {
-            "error": str(e),
-            "message": "Failed to fetch premade scenarios"
-        }
-
 @app.get("/test/all-endpoints")
 def test_all_endpoints():
     """Test endpoint to verify all API functionality."""
@@ -887,12 +809,12 @@ def test_all_endpoints():
         except Exception as e:
             results["database_connection"] = f"❌ Failed: {str(e)}"
         
-        # Test 2: Check premade scenarios
+        # Test 2: Check partners
         try:
-            response = supabase.table("premade_scenarios").select("*").execute()
-            results["premade_scenarios"] = f"✅ Found {len(response.data)} scenarios"
+            response = supabase.table("partners").select("*").execute()
+            results["partners"] = f"✅ Found {len(response.data)} partners"
         except Exception as e:
-            results["premade_scenarios"] = f"❌ Failed: {str(e)}"
+            results["partners"] = f"❌ Failed: {str(e)}"
         
         # Test 3: Check users table
         try:
@@ -901,48 +823,34 @@ def test_all_endpoints():
         except Exception as e:
             results["users_table"] = f"❌ Failed: {str(e)}"
         
-        # Test 4: Check custom scenarios table
-        try:
-            response = supabase.table("custom_scenarios").select("*").execute()
-            results["custom_scenarios"] = f"✅ Found {len(response.data)} scenarios"
-        except Exception as e:
-            results["custom_scenarios"] = f"❌ Failed: {str(e)}"
-        
-        # Test 5: Check conversation history table
+        # Test 4: Check conversation history table
         try:
             response = supabase.table("conversation_history").select("*").execute()
             results["conversation_history"] = f"✅ Found {len(response.data)} messages"
         except Exception as e:
             results["conversation_history"] = f"❌ Failed: {str(e)}"
         
-        # Test 6: Test enum filtering
-        try:
-            response = supabase.table("premade_scenarios").select("*").eq("user_level", "B1").execute()
-            results["enum_filtering"] = f"✅ Found {len(response.data)} B1 scenarios"
-        except Exception as e:
-            results["enum_filtering"] = f"❌ Failed: {str(e)}"
-        
         return {
-            "status": "Test completed",
+            "status": "test_completed",
             "results": results,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         return {
-            "status": "Test failed",
+            "status": "test_failed",
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
 # ============================================================================
-# Get Chat History
-# ============================================================================  
+# Helper Functions
+# ============================================================================
 
 @app.get("/threads/{thread_id}/messages")
 def get_messages_by_thread(thread_id: str, supabase_client: Client = Depends(get_supabase)):
     """
-        Get all messages from a thread
+    Get all messages from a thread
     """
-
     try:
         messages = get_conversation_history(supabase_client, thread_id)
         return messages
@@ -952,78 +860,46 @@ def get_messages_by_thread(thread_id: str, supabase_client: Client = Depends(get
         logger.error(f"Error fetching messages for thread {thread_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Fail to fetch message history")
 
-
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-def get_scenario_config(req: ChatRequest, user: User) -> Optional[Dict]:
+def get_partner_config(partner_id: UUID, supabase_client: Client) -> Optional[Dict]:
     """
-    Get scenario configuration from either custom or premade scenarios.
-    
-    Priority:
-    1. Custom scenarios (if scenario_id provided)
-    2. Premade scenarios (if scenario_id matches)
-    3. Request parameters (if ai_role and scenario provided)
+    Get partner configuration from the partners table.
     
     Args:
-        req: ChatRequest containing scenario information
-        user: User object for default values
+        partner_id: Partner identifier
+        supabase_client: Supabase client
     
     Returns:
-        Dict containing scenario configuration or None if invalid
+        Dict containing partner configuration or None if not found
     """
     try:
-        # First check if it's a custom scenario
-        if req.scenario_id:
-            # Check custom scenarios
-            custom_response = supabase.table("custom_scenarios").select("*").eq("id", req.scenario_id).eq("is_active", True).execute()
-            if custom_response.data:
-                custom_scenario = custom_response.data[0]
-                return {
-                    "id": custom_scenario["id"],
-                    "ai_role": custom_scenario["ai_role"],
-                    "scenario": custom_scenario["scenario"],
-                    "target_language": custom_scenario["target_language"],
-                    "user_level": custom_scenario["user_level"]
-                }
-            
-            # Check premade scenarios
-            premade_response = supabase.table("premade_scenarios").select("*").eq("id", req.scenario_id).eq("is_active", True).execute()
-            if premade_response.data:
-                premade_scenario = premade_response.data[0]
-                return {
-                    "id": premade_scenario["id"],
-                    "ai_role": premade_scenario["ai_role"],
-                    "scenario": premade_scenario["scenario"],
-                    "target_language": premade_scenario["target_language"],
-                    "user_level": premade_scenario["user_level"]
-                }
-
-        # If no scenario ID provided, use the request parameters
-        if req.ai_role and req.scenario:
+        response = supabase_client.table("partners").select("*").eq("id", str(partner_id)).eq("is_active", True).execute()
+        if response.data:
+            partner = response.data[0]
             return {
-                "id": str(uuid.uuid4()),
-                "ai_role": req.ai_role,
-                "scenario": req.scenario,
-                "target_language": req.target_language or user["target_language"],
-                "user_level": user["user_level"]
+                "id": partner["id"],
+                "name": partner["name"],
+                "ai_role": partner["ai_role"],
+                "scenario": partner["scenario"],
+                "target_language": partner["target_language"],
+                "user_level": partner["user_level"],
+                "personality": partner.get("personality", ""),
+                "background": partner.get("background", ""),
+                "communication_style": partner.get("communication_style", ""),
+                "expertise": partner.get("expertise", ""),
+                "interests": partner.get("interests", "")
             }
-
         return None
     except Exception as e:
-        logger.error(f"Error getting scenario config: {str(e)}")
+        logger.error(f"Error getting partner config: {str(e)}")
         return None
 
 def store_message(
     supabase_client: Client,
     thread_id: str,
-    user_id: str,
+    user_id: UUID,
     role: str,
     content: str,
-    scenario_id: Optional[str],
-    scenario_type: Optional[str] = None
+    partner_id: UUID
 ) -> Dict:
     """
     Store a message in the conversation history.
@@ -1034,21 +910,20 @@ def store_message(
         user_id: User ID of the participant
         role: Message sender role (user/assistant)
         content: Message content
-        scenario_id: Associated scenario ID
-        scenario_type: Type of scenario ('premade' or 'custom')
+        partner_id: Associated partner ID
     
     Returns:
         Stored message data
     """
+
     message_data = {
         "thread_id": thread_id,
-        "user_id": user_id,
-        "message_id": str(uuid.uuid4()),
+        "user_id": str(user_id),  
+        "message_id": str(uuid.uuid4()),  # make sure to convert to str to not error :)
         "role": role,
         "content": content,
         "timestamp": datetime.now().isoformat(),
-        "scenario_id": scenario_id,
-        "scenario_type": scenario_type
+        "partner_id": str(partner_id)  
     }
     
     response = supabase_client.table("conversation_history").insert(message_data).execute()
@@ -1080,13 +955,13 @@ def get_conversation_history(
         )
     return response.data
 
-def process_chat(req: ChatRequest, scenario: Dict) -> str:
+def process_chat(req: ChatRequest, partner: Dict) -> str:
     """
     Process chat request using the AI chat agent.
     
     Args:
         req: ChatRequest containing user input
-        scenario: Scenario configuration
+        partner: Partner configuration
     
     Returns:
         AI response as string
@@ -1104,10 +979,16 @@ def process_chat(req: ChatRequest, scenario: Dict) -> str:
             "content": req.user_input
         }],
         "user_name": req.user_name,
-        "ai_role": scenario["ai_role"],
-        "scenario": scenario["scenario"],
-        "target_language": scenario["target_language"],
-        "user_level": scenario["user_level"]
+        "ai_role": partner["ai_role"],
+        "scenario": partner["scenario"],
+        "target_language": partner["target_language"],
+        "user_level": partner["user_level"],
+        "partner_name": partner["name"],
+        "personality": partner.get("personality", ""),
+        "background": partner.get("background", ""),
+        "communication_style": partner.get("communication_style", ""),
+        "expertise": partner.get("expertise", ""),
+        "interests": partner.get("interests", "")
     }
 
     result = chat_agent.invoke(new_state, config=config)
