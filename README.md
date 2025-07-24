@@ -1,8 +1,10 @@
 # PolyNot Language Learning API
 
+A revolutionary language learning platform that provides authentic conversational experiences through AI-powered partners with distinct personalities, backgrounds, and expertise.
+
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - pip (Python package manager)
 - virtualenv (recommended)
 
@@ -12,14 +14,14 @@
 
 ```bash
 # Create virtual environment
-python -m venv venv
+python -m venv .venv
 
 # Activate virtual environment
 # On Windows:
-venv\Scripts\activate
+.venv\Scripts\activate
 
 # On macOS/Linux:
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 2. Install dependencies:
@@ -36,10 +38,14 @@ pip install -r requirements.txt
 # OpenAI API Key
 OPENAI_API_KEY=your_openai_api_key
 
-# LangSmith Configuration
+# LangSmith Configuration (optional)
 LANGSMITH_API_KEY=your_langsmith_api_key
 LANGSMITH_PROJECT=polynot
 
+# Supabase Configuration
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
+```
 
 ## Running the Server
 
@@ -64,31 +70,52 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 - `GET /users/{user_name}` - Get user information
 - `PATCH /users/{user_name}` - Update user's language level
 
-### Chat
+### Partner Management
+- `POST /partners/` - Create a new custom partner
+- `GET /partners/` - Get all partners (with optional filters)
+- `GET /partners/{user_name}` - Get user's custom partners
+
+### Chat & Conversation
 - `POST /chat` - Start or continue a conversation
-- `POST /feedback` - Get feedback on a conversation
+- `GET /threads/{thread_id}/messages` - Get conversation history
+
+### Analysis & Feedback
+- `POST /feedback` - Get detailed feedback on a conversation
 - `POST /evaluate` - Evaluate user's language level
+
+### Health & Status
+- `GET /` - Basic health check
+- `GET /health` - Detailed health check
+- `GET /test/all-endpoints` - Comprehensive system test
 
 ## Testing
 
-### Unit Tests
+### Quick API Test
 
 ```bash
-# Run all tests
-pytest
+# Health check
+curl http://localhost:8000/health
 
-# Run specific test file
-pytest tests/test_main.py
+# Test all endpoints
+curl http://localhost:8000/test/all-endpoints
 
-# Run with coverage
-pytest --cov=src tests/
+# Create a test user
+curl -X POST "http://localhost:8000/users/" \
+     -H "Content-Type: application/json" \
+     -d '{"user_name": "test_user", "user_level": "A2", "target_language": "English"}'
+```
+
+### Comprehensive Test Suite
+
+```bash
+# Run the full test suite
+python docs_and_tests/test_enhanced_partner_system.py
 ```
 
 ### API Testing
 
 1. Using Swagger UI:
    - Open http://localhost:8000/docs
-   - Authenticate using your API key
    - Test endpoints directly from the interface
 
 2. Using curl:
@@ -99,54 +126,92 @@ curl -X POST "http://localhost:8000/users/" \
      -H "Content-Type: application/json" \
      -d '{"user_name": "test_user", "user_level": "A2", "target_language": "English"}'
 
-# Start a chat
+# Create a custom partner
+curl -X POST "http://localhost:8000/partners/?user_name=test_user" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "Tour Guide",
+       "ai_role": "friendly tour guide",
+       "scenario": "Exploring a new city with local insights",
+       "target_language": "English",
+       "user_level": "B1",
+       "personality": "Enthusiastic and knowledgeable about local culture",
+       "background": "Has been a tour guide for 5 years in this city",
+       "communication_style": "Friendly and informative, speaks clearly",
+       "expertise": "Local history, culture, and hidden gems",
+       "interests": "Local cuisine, photography, meeting people from different cultures"
+     }'
+
+# Start a chat with a partner
 curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
-     -d '{"user_name": "test_user", "thread_id": "123", "user_input": "Hello!", "scenario_id": "coffee_shop"}'
+     -d '{
+       "user_name": "test_user",
+       "thread_id": "123",
+       "user_input": "Hello!",
+       "partner_id": "partner_uuid"
+     }'
 ```
 
-### Available Scenarios
+### Available Premade Partners
 
-The API includes the following premade scenarios:
+The API includes the following premade partners with detailed character profiles:
 
-1. `coffee_shop` (A2) - Ordering at a coffee shop
-2. `job_interview` (B2) - Job interview for marketing position
-3. `first_date` (B1) - First date at a restaurant
-4. `travel_planning` (B1) - Planning a vacation
-5. `doctor_visit` (B2) - Visit to the doctor's office
-6. `shopping` (A2) - Shopping for clothes
+1. **Emily Carter** (A2) - Coffee Shop Barista
+   - Warm, enthusiastic barista who loves coffee and helping customers
+2. **Michael Lee** (B2) - Hiring Manager
+   - Professional hiring manager conducting job interviews
+3. **Sophie Martin** (B1) - Date Partner
+   - Friendly person on a first date at a casual restaurant
+4. **Carlos Rivera** (B1) - Travel Agent
+   - Enthusiastic travel agent helping plan vacations
+5. **Dr. Olivia Smith** (B2) - Doctor
+   - Caring doctor in a medical consultation
+6. **Anna Kim** (A2) - Shop Assistant
+   - Friendly shop assistant helping with clothing purchases
 
-### Sample Scenario Test
+### Sample Partner Test
 
-Here's a complete example using the coffee shop scenario:
+Here's a complete example using a custom partner:
 
 ```bash
 # 1. Create a user
 curl -X POST "http://localhost:8000/users/" \
      -H "Content-Type: application/json" \
      -d '{
-       "user_name": "coffee_lover",
-       "user_level": "A2",
+       "user_name": "alex",
+       "user_level": "B1",
        "target_language": "English"
      }'
 
-# 2. Start coffee shop conversation
+# 2. Create a custom partner
+curl -X POST "http://localhost:8000/partners/?user_name=alex" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "City Tour Guide",
+       "ai_role": "friendly tour guide",
+       "scenario": "Exploring a new city with local insights",
+       "target_language": "English",
+       "user_level": "B1",
+       "personality": "Enthusiastic and knowledgeable about local culture",
+       "background": "Has been a tour guide for 5 years in this city",
+       "communication_style": "Friendly and informative, speaks clearly",
+       "expertise": "Local history, culture, and hidden gems",
+       "interests": "Local cuisine, photography, meeting people from different cultures"
+     }'
+
+# 3. Start conversation with the partner
 curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
      -d '{
-       "user_name": "coffee_lover",
-       "thread_id": "coffee_conv_1",
-       "user_input": "Hello, I would like to order a coffee",
-       "scenario_id": "coffee_shop"
+       "user_name": "alex",
+       "thread_id": "tour_conversation_1",
+       "user_input": "Hi! I just arrived in the city and would love to explore some local places.",
+       "partner_id": "partner_uuid_from_step_2"
      }'
 
-# 3. Get feedback
-curl -X POST "http://localhost:8000/feedback" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "user_name": "coffee_lover",
-       "thread_id": "coffee_conv_1"
-     }'
+# 4. Get feedback
+curl -X POST "http://localhost:8000/feedback?user_name=alex&thread_id=tour_conversation_1"
 ```
 
 To test in Swagger UI:
@@ -156,9 +221,36 @@ To test in Swagger UI:
 4. Use this sample request body:
 ```json
 {
-  "user_name": "coffee_lover",
-  "thread_id": "coffee_conv_1",
-  "user_input": "Hello, I would like to order a coffee",
-  "scenario_id": "coffee_shop"
+  "user_name": "alex",
+  "thread_id": "tour_conversation_1",
+  "user_input": "Hi! I just arrived in the city.",
+  "partner_id": "your_partner_id"
 }
 ```
+
+## Database Schema
+
+The API uses Supabase with the following main tables:
+
+- `users` - User information and language levels
+- `partners` - Conversation partners (both premade and custom) with enhanced character profiles
+- `conversation_history` - Chat messages and conversation threads
+
+## Features
+
+- **Authentic AI Partners**: Realistic characters with detailed personalities, backgrounds, and expertise
+- **Natural Conversations**: Partners respond as real people, not language tutors
+- **Progress Tracking**: Automated level evaluation and detailed feedback
+- **Customizable Partners**: Create your own conversation partners with full character profiles
+- **Language Learning**: AI partners adapt to user's language level
+- **Conversation History**: Track and retrieve chat conversations
+- **Feedback System**: Get detailed feedback on conversations
+- **Level Evaluation**: Assess user's language progress
+
+## Documentation
+
+For comprehensive documentation, visit the [`docs_and_tests/`](docs_and_tests/) folder:
+
+- **[📖 Main Documentation](docs_and_tests/README.md)** - Complete project overview and quick start
+- **[🔧 Technical Documentation](docs_and_tests/TECHNICAL_DOCUMENTATION.md)** - Architecture, deployment, and development guide
+- **[📡 API Reference](docs_and_tests/API_REFERENCE.md)** - Complete API endpoints and examples
