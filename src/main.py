@@ -371,6 +371,93 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
             detail="Failed to process chat"
         )
 
+@app.get("/messages/{user_name}/{partner_id}")
+def get_thread_messages(
+    user_name: str, 
+    partner_id: str, 
+    supabase_client: Client = Depends(get_supabase)
+):
+    """
+    Get all messages for a user in a specific thread.
+    
+    Args:
+        user_name: The name of the user
+        partner_id: The ID of the partner (UUID string)
+    
+    Returns:
+        List of messages in chronological order with thread information
+    """
+    try:
+        # Verify user exists
+        user_response = supabase_client.table("users").select("*").eq("user_name", user_name).execute()
+        if not user_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # Verify partner exists
+        partner_response = supabase_client.table("partners").select("*").eq("id", partner_id).eq("is_active", True).execute()
+        if not partner_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Partner not found"
+            )
+        
+        # Generate thread ID
+        thread_id = generate_thread_id(user_name, partner_id)
+        
+        # Get thread information
+        thread = get_thread(thread_id, supabase_client)
+        if not thread:
+            # Return empty response if thread doesn't exist
+            return {
+                "thread_id": thread_id,
+                "user_name": user_name,
+                "partner_id": partner_id,
+                "partner_name": partner_response.data[0]["name"],
+                "messages": [],
+                "message_count": 0,
+                "created_at": None,
+                "updated_at": None
+            }
+        
+        # Get all messages for the thread
+        messages = get_messages(thread_id, supabase_client)
+        
+        # Format messages for response
+        formatted_messages = []
+        for msg in messages:
+            formatted_messages.append({
+                "id": msg.get("id"),
+                "role": msg["role"],
+                "content": msg["content"],
+                "message_timestamp": msg["message_timestamp"],
+                "thread_id": msg["thread_id"]
+            })
+        
+        logger.info(f"Retrieved {len(formatted_messages)} messages for thread {thread_id}")
+        
+        return {
+            "thread_id": thread_id,
+            "user_name": user_name,
+            "partner_id": partner_id,
+            "partner_name": partner_response.data[0]["name"],
+            "messages": formatted_messages,
+            "message_count": len(formatted_messages),
+            "created_at": thread.get("created_at"),
+            "updated_at": thread.get("updated_at")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting thread messages: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve thread messages"
+        )
+
 # ============================================================================
 # Helper Functions (Updated)
 # ============================================================================
