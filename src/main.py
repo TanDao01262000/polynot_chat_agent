@@ -15,6 +15,7 @@ from datetime import datetime
 from supabase import create_client, Client
 from uuid import UUID
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 from .chat_agent import chat_agent
 from .models import (
@@ -145,6 +146,13 @@ app = FastAPI(
     version="2.0.0"
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for testing
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # ============================================================================
 # Initial Premade Partners (same as before)
 # ============================================================================
