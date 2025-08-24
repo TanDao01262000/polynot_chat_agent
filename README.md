@@ -66,9 +66,20 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 ## API Endpoints
 
 ### User Management
-- `POST /users/` - Create a new user
+- `POST /users/` - Create a new user (requires email)
 - `GET /users/{user_name}` - Get user information
+- `DELETE /users/{user_name}` - Delete user account
 - `PATCH /users/{user_name}` - Update user's language level
+
+### User Profile Management
+- `GET /users/{user_name}/profile` - Get complete user profile with statistics
+- `PATCH /users/{user_name}/profile` - Update user profile information
+- `PATCH /users/{user_name}/level` - Update user's language level
+- `GET /users/{user_name}/statistics` - Get user learning statistics
+- `POST /users/{user_name}/login` - Record user login and update streak
+- `GET /users/{user_name}/profile/completion` - Get profile completion percentage
+- `GET /users/{user_name}/profile/achievements` - Get user achievements
+- `POST /migrate/user-profiles` - Migrate existing users to new profile system
 
 ### Partner Management
 - `POST /partners/` - Create a new custom partner
@@ -87,6 +98,48 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 - `GET /` - Basic health check
 - `GET /health` - Detailed health check
 - `GET /test/all-endpoints` - Comprehensive system test
+
+## User Creation & Login
+
+### User Creation Requirements
+
+**Required Fields:**
+- `user_name`: 3-30 characters, no spaces, alphanumeric + underscore/hyphen only
+- `user_level`: One of A1, A2, B1, B2, C1, C2
+- `target_language`: Language to learn (e.g., "English", "Spanish")
+- `email`: Real email address (Gmail, Yahoo, Outlook, etc.)
+
+**Username Rules:**
+- ✅ Valid: `john_doe`, `john-doe`, `johndoe`, `user123`
+- ❌ Invalid: `john doe` (spaces), `123user` (starts with number), `admin` (reserved)
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8000/users/" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "user_name": "john_doe",
+       "user_level": "A2",
+       "target_language": "English",
+       "email": "john.doe@gmail.com"
+     }'
+```
+
+### Login
+
+**Login only requires username:**
+```bash
+curl -X POST "http://localhost:8000/users/john_doe/login"
+```
+
+**Response:**
+```json
+{
+  "message": "Login recorded successfully",
+  "streak_days": 1,
+  "last_login": "2025-08-22T20:55:26.569"
+}
+```
 
 ## Testing
 
@@ -151,6 +204,38 @@ curl -X POST "http://localhost:8000/chat" \
        "user_input": "Hello!",
        "partner_id": "partner_uuid"
      }'
+
+# Test User Profile Feature
+curl -X POST "http://localhost:8000/users/" \
+     -H "Content-Type: application/json" \
+     -d '{"user_name": "profile_user", "user_level": "B1", "target_language": "English"}'
+
+# Update user profile
+curl -X PATCH "http://localhost:8000/users/profile_user/profile" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "email": "profile_user@example.com",
+       "first_name": "John",
+       "last_name": "Doe",
+       "bio": "Passionate language learner",
+       "native_language": "Spanish",
+       "learning_goals": "Become fluent in English for work",
+       "preferred_topics": "Business, travel, technology"
+     }'
+
+# Get complete user profile
+curl -X GET "http://localhost:8000/users/profile_user/profile"
+
+# Get user statistics
+curl -X GET "http://localhost:8000/users/profile_user/statistics"
+
+# Record user login
+curl -X POST "http://localhost:8000/users/profile_user/login"
+
+# Update user level
+curl -X PATCH "http://localhost:8000/users/profile_user/level" \
+     -H "Content-Type: application/json" \
+     -d '{"user_level": "B2"}'
 ```
 
 ### Available Premade Partners

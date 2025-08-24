@@ -49,7 +49,7 @@ def level_evaluator_tool(
     """
     # Get current level first
     try:
-        response = supabase.table("users").select("*").eq("user_name", user_name).execute()
+        response = supabase.table("profiles").select("*").eq("user_name", user_name).execute()
         if not response.data:
             return json.dumps({
                 "success": False,
@@ -115,7 +115,7 @@ def level_evaluator_tool(
         # If should_update is true, update the level
         if should_update:
             try:
-                update_response = supabase.table("users").update({"user_level": response_data["estimated_level"]}).eq("user_name", user_name).execute()
+                update_response = supabase.table("profiles").update({"user_level": response_data["estimated_level"]}).eq("user_name", user_name).execute()
                 if update_response.data:
                     response_data["update_success"] = True
                     response_data["update_message"] = f"Level updated from {current_level} to {response_data['estimated_level']}"
@@ -143,7 +143,7 @@ def get_user_level_tool(user_name: str) -> str:
     Returns a JSON object with 'level' and 'status'.
     """
     try:
-        response = supabase.table("users").select("*").eq("user_name", user_name).execute()
+        response = supabase.table("profiles").select("*").eq("user_name", user_name).execute()
         
         if not response.data:
             return json.dumps({
