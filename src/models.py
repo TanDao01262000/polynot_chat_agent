@@ -1,194 +1,277 @@
 from sqlmodel import SQLModel, Field, Relationship
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
 from enum import Enum
-from pydantic import validator
+from pydantic import validator, field_validator
 
 if False:
     from sqlmodel import Session
 
+# ============================================================================
+# User Models
+# ============================================================================
+
 class UserLevel(str, Enum):
-    A1 = "A1"
-    A2 = "A2"
-    B1 = "B1"
-    B2 = "B2"
-    C1 = "C1"
-    C2 = "C2"
-    
-    def __str__(self):
-        return self.value
+    """User language proficiency levels based on CEFR"""
+    A1 = "A1"  # Beginner
+    A2 = "A2"  # Elementary
+    B1 = "B1"  # Intermediate
+    B2 = "B2"  # Upper Intermediate
+    C1 = "C1"  # Advanced
+    C2 = "C2"  # Mastery
 
 class User(SQLModel, table=True):
+    """User model for language learners - maps to profiles table"""
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_name: str = Field(unique=True, index=True, description="Unique username", min_length=1, max_length=50)
-    user_level: UserLevel = Field(description="Current CEFR level")
-    target_language: str = Field(description="Language being learned", min_length=1, max_length=50)
+    user_name: str = Field(unique=True, description="Unique username")
+    user_level: UserLevel = Field(description="User's language proficiency level")
+    target_language: str = Field(description="Language the user wants to learn (will be stored as array in DB)")
+    email: str = Field(description="User's email address (required for account creation)")
+    first_name: Optional[str] = Field(default=None, description="User's first name")
+    last_name: Optional[str] = Field(default=None, description="User's last name")
+    native_language: Optional[str] = Field(default=None, description="User's native language")
+    country: Optional[str] = Field(default=None, description="User's country")
+    interests: Optional[str] = Field(default=None, description="User's interests (comma-separated)")
+    proficiency_level: Optional[str] = Field(default=None, description="User's proficiency level")
+    bio: Optional[str] = Field(default=None, description="User's bio")
+    learning_goals: Optional[str] = Field(default=None, description="User's learning goals")
+    preferred_topics: Optional[str] = Field(default=None, description="Preferred conversation topics")
+    study_time_preference: Optional[str] = Field(default=None, description="Preferred study time")
+    avatar_url: Optional[str] = Field(default=None, description="User's avatar URL")
+    is_active: bool = Field(default=True, description="Whether user account is active")
+    last_login: Optional[str] = Field(default=None, description="Last login timestamp")
+    total_conversations: int = Field(default=0, description="Total conversations")
+    total_messages: int = Field(default=0, description="Total messages")
+    streak_days: int = Field(default=0, description="Current streak days")
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    partners: List["Partner"] = Relationship(back_populates="user")
-    # Remove conversation_threads relationship - it uses user_name string, not UUID foreign key
+    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    
     @validator('user_name')
-    def validate_user_name(cls, v):
+    def validate_username(cls, v):
         if not v or not v.strip():
             raise ValueError('Username cannot be empty')
         return v.strip()
+    
     @validator('target_language')
     def validate_target_language(cls, v):
         if not v or not v.strip():
             raise ValueError('Target language cannot be empty')
         return v.strip()
+
+# ============================================================================
+# Partner Models
+# ============================================================================
 
 class Partner(SQLModel, table=True):
+    """AI conversation partner model"""
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    name: str = Field(description="Display name for the partner", min_length=1, max_length=100)
-    user_id: Optional[uuid.UUID] = Field(foreign_key="user.id", description="ID of the creator (null for premade)")
-    ai_role: str = Field(description="Role of the AI in the conversation", min_length=1, max_length=100)
-    scenario: str = Field(description="Description of the conversation scenario", min_length=1, max_length=500)
-    target_language: str = Field(description="Language for the conversation", min_length=1, max_length=50)
-    user_level: UserLevel = Field(description="Target CEFR level")
-    
-    # Enhanced partner description fields
-    personality: str = Field(description="Personality traits and characteristics", min_length=1, max_length=1000)
-    background: str = Field(description="Background story and experience", min_length=1, max_length=1000)
-    communication_style: str = Field(description="How the partner communicates (formal/informal, tone, etc.)", min_length=1, max_length=500)
-    expertise: str = Field(description="Specific knowledge and expertise in their field", min_length=1, max_length=1000)
-    interests: str = Field(description="Personal interests and hobbies", min_length=1, max_length=500)
-    
+    name: str = Field(description="Partner's name")
+    user_id: Optional[uuid.UUID] = Field(default=None, description="ID of the creator (null for premade)")
+    ai_role: str = Field(description="Partner's role or profession")
+    scenario: str = Field(description="Conversation scenario or context")
+    target_language: str = Field(description="Language the partner speaks")
+    user_level: UserLevel = Field(description="Appropriate user level for this partner")
+    personality: str = Field(description="Partner's personality traits")
+    background: str = Field(description="Partner's background story")
+    communication_style: str = Field(description="How the partner communicates")
+    expertise: str = Field(description="Partner's areas of expertise")
+    interests: str = Field(description="Partner's interests and hobbies")
     is_premade: bool = Field(default=False, description="Whether this is a premade partner")
-    is_active: bool = Field(default=True, description="Whether the partner is active")
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    user: Optional[User] = Relationship(back_populates="partners")
-    conversation_threads: List["ConversationThread"] = Relationship(back_populates="partner")
-
-class ConversationThread(SQLModel, table=True):
-    """New table for managing user-specific conversation threads"""
-    id: str = Field(primary_key=True, description="Thread ID in format: user_name_partner_id")
-    user_name: str = Field(index=True, description="Username")
-    partner_id: uuid.UUID = Field(foreign_key="partner.id", description="Partner ID")
+    is_active: bool = Field(default=True, description="Whether this partner is available")
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     
-    # Relationships - only partner relationship since user uses string, not UUID
-    partner: Optional[Partner] = Relationship(back_populates="conversation_threads")
-    messages: List["Message"] = Relationship(back_populates="thread")
+    @validator('name', 'ai_role', 'scenario', 'target_language', 'personality', 'background', 'communication_style', 'expertise', 'interests')
+    def validate_required_fields(cls, v):
+        if not v or not v.strip():
+            raise ValueError('This field cannot be empty')
+        return v.strip()
 
-class Message(SQLModel, table=True):
-    """New table for individual messages in threads"""
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    thread_id: str = Field(foreign_key="conversationthread.id", index=True, description="Thread ID")
-    role: str = Field(description="Role of the message sender (user/assistant)")
-    content: str = Field(description="Message content")
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
-    
-    # Relationships
-    thread: Optional[ConversationThread] = Relationship(back_populates="messages")
-
-class CreatePartnerRequest(SQLModel):
-    name: str = Field(description="Display name for the partner", min_length=1, max_length=100)
-    ai_role: str = Field(description="Role of the AI in the conversation", min_length=1, max_length=100)
-    scenario: str = Field(description="Description of the conversation scenario", min_length=1, max_length=500)
-    target_language: str = Field(description="Language for the conversation", min_length=1, max_length=50)
-    user_level: str = Field(description="Target CEFR level as string", min_length=2, max_length=2)
-    
-    # Enhanced partner description fields
-    personality: str = Field(description="Personality traits and characteristics", min_length=1, max_length=1000)
-    background: str = Field(description="Background story and experience", min_length=1, max_length=1000)
-    communication_style: str = Field(description="How the partner communicates (formal/informal, tone, etc.)", min_length=1, max_length=500)
-    expertise: str = Field(description="Specific knowledge and expertise in their field", min_length=1, max_length=1000)
-    interests: str = Field(description="Personal interests and hobbies", min_length=1, max_length=500)
-    
-    @validator('name')
-    def validate_name(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Partner name cannot be empty')
-        return v.strip()
-    @validator('ai_role')
-    def validate_ai_role(cls, v):
-        if not v or not v.strip():
-            raise ValueError('AI role cannot be empty')
-        return v.strip()
-    @validator('scenario')
-    def validate_scenario(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Scenario description cannot be empty')
-        return v.strip()
-    @validator('target_language')
-    def validate_target_language(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Target language cannot be empty')
-        return v.strip()
-    @validator('user_level')
-    def validate_user_level(cls, v):
-        if not v or not v.strip():
-            raise ValueError('User level cannot be empty')
-        if v not in [level.value for level in UserLevel]:
-            raise ValueError(f'Invalid user_level: {v}. Must be one of: {[level.value for level in UserLevel]}')
-        return v.strip()
-    @validator('personality')
-    def validate_personality(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Personality description cannot be empty')
-        return v.strip()
-    @validator('background')
-    def validate_background(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Background description cannot be empty')
-        return v.strip()
-    @validator('communication_style')
-    def validate_communication_style(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Communication style cannot be empty')
-        return v.strip()
-    @validator('expertise')
-    def validate_expertise(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Expertise description cannot be empty')
-        return v.strip()
-    @validator('interests')
-    def validate_interests(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Interests description cannot be empty')
-        return v.strip()
+# ============================================================================
+# Chat and Conversation Models
+# ============================================================================
 
 class ChatRequest(SQLModel):
-    """Simplified chat request - thread_id is auto-generated"""
-    user_name: str = Field(description="Username of the chat participant")
-    partner_id: uuid.UUID = Field(description="ID of the conversation partner")
-    user_input: str = Field(description="User's message content")
-
-class GreetRequest(SQLModel):
-    """Simplified greeting request - thread_id is auto-generated"""
-    user_name: str = Field(description="Username of the user")
-    partner_id: uuid.UUID = Field(description="ID of the conversation partner")
-
-class GreetingResponse(SQLModel):
-    greeting_message: str = Field(description="The partner's greeting message")
-    partner_name: str = Field(description="Name of the partner")
-    partner_role: str = Field(description="Role of the partner")
-    scenario: str = Field(description="Current conversation scenario")
-    thread_id: str = Field(description="Conversation thread ID")
-    user_level: str = Field(description="User's current language level")
-    target_language: str = Field(description="Target language for the conversation")
+    """Request model for chat interactions"""
+    user_name: str = Field(description="Username of the person chatting")
+    user_input: str = Field(description="User's message input")
+    partner_id: uuid.UUID = Field(description="ID of the AI partner")
+    thread_id: Optional[str] = Field(default=None, description="Conversation thread ID")
 
 class ChatResponse(SQLModel):
+    """Response model for chat interactions"""
     response: str = Field(description="AI partner's response")
     thread_id: str = Field(description="Conversation thread ID")
 
-class Feedback(SQLModel):
-    conversation_summary: str = Field(description="Overall summary of the conversation")
-    message_analysis: List[Dict] = Field(description="Detailed analysis of each message")
-    learning_points: List[str] = Field(description="Key learning points from the conversation")
-    progress_tracking: Dict = Field(description="Progress metrics and improvements")
-
-# Keep the old ConversationHistory for backward compatibility during migration
-class ConversationHistory(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    thread_id: str = Field(index=True, description="Conversation thread identifier")
-    user_id: uuid.UUID = Field(foreign_key="user.id", index=True, description="ID of the participant")
-    message_id: str = Field(description="Unique message identifier")
-    role: str = Field(description="Role of the message sender (user/assistant)")
+class Message(SQLModel, table=True):
+    """Individual message in a conversation"""
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    thread_id: str = Field(description="Conversation thread ID")
+    role: str = Field(description="Message sender (user/assistant)")
     content: str = Field(description="Message content")
-    timestamp: str = Field(description="Message timestamp")
-    partner_id: Optional[uuid.UUID] = Field(default=None, description="Associated partner ID")
-    # Remove user relationship to avoid conflicts with new system
+    message_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    
+    @validator('content', 'role')
+    def validate_required_fields(cls, v):
+        if not v or not v.strip():
+            raise ValueError('This field cannot be empty')
+        return v.strip()
+
+class ConversationThread(SQLModel, table=True):
+    """Conversation thread model"""
+    id: str = Field(primary_key=True, description="Thread ID")
+    user_name: str = Field(description="Username")
+    partner_id: uuid.UUID = Field(description="Partner ID")
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+class ConversationHistory(SQLModel):
+    """Model for conversation history"""
+    thread_id: str = Field(description="Thread ID")
+    messages: List[Message] = Field(description="List of messages")
+
+# ============================================================================
+# Feedback and Evaluation Models
+# ============================================================================
+
+class Feedback(SQLModel):
+    """Model for conversation feedback"""
+    thread_id: str = Field(description="Thread ID")
+    feedback: Dict[str, Any] = Field(description="Detailed feedback")
+
+class FeedbackRequest(SQLModel):
+    """Request model for feedback"""
+    thread_id: str = Field(description="Thread ID")
+    user_name: str = Field(description="Username")
+
+class EvaluationRequest(SQLModel):
+    """Request model for level evaluation"""
+    thread_id: str = Field(description="Thread ID")
+    user_name: str = Field(description="Username")
+
+class EvaluationResponse(SQLModel):
+    """Response model for level evaluation"""
+    current_level: str = Field(description="Current language level")
+    suggested_level: str = Field(description="Suggested new level")
+    confidence: float = Field(description="Confidence in the evaluation")
+    reasoning: str = Field(description="Reasoning for the evaluation")
+
+# ============================================================================
+# Partner Management Models
+# ============================================================================
+
+class CreatePartnerRequest(SQLModel):
+    """Request model for creating custom partners"""
+    name: str = Field(description="Partner's name")
+    ai_role: str = Field(description="Partner's role or profession")
+    scenario: str = Field(description="Conversation scenario or context")
+    target_language: str = Field(description="Language the partner speaks")
+    user_level: UserLevel = Field(description="Appropriate user level for this partner")
+    personality: str = Field(description="Partner's personality traits")
+    background: str = Field(description="Partner's background story")
+    communication_style: str = Field(description="How the partner communicates")
+    expertise: str = Field(description="Partner's areas of expertise")
+    interests: str = Field(description="Partner's interests and hobbies")
+    user_name: Optional[str] = Field(default=None, description="Username of the partner creator (for user-specific partners)")
+
+# ============================================================================
+# Greeting Models
+# ============================================================================
+
+class GreetRequest(SQLModel):
+    """Request model for greeting generation"""
+    user_name: str = Field(description="Username")
+    partner_id: uuid.UUID = Field(description="Partner ID")
+
+class GreetingResponse(SQLModel):
+    """Response model for greeting generation"""
+    greeting_message: str = Field(description="Generated greeting message")
+    partner_name: str = Field(description="Partner's name")
+    partner_role: str = Field(description="Partner's role")
+    scenario: str = Field(description="Conversation scenario")
+    thread_id: str = Field(description="Thread ID")
+    user_level: str = Field(description="User's language level")
+    target_language: str = Field(description="Target language")
+
+# ============================================================================
+# Enhanced User Profile Models
+# ============================================================================
+
+class Achievement(SQLModel):
+    """Model for user achievements"""
+    id: str = Field(description="Achievement ID")
+    name: str = Field(description="Achievement name")
+    description: str = Field(description="Achievement description")
+    icon: str = Field(description="Achievement icon")
+    unlocked_at: Optional[str] = Field(description="When achievement was unlocked")
+
+class Milestone(SQLModel):
+    """Model for user milestones"""
+    type: str = Field(description="Milestone type")
+    current: int = Field(description="Current progress")
+    next: int = Field(description="Next milestone target")
+    description: str = Field(description="Milestone description")
+
+class UserAchievements(SQLModel):
+    """Model for user achievements response"""
+    total_achievements: int = Field(description="Total number of achievements")
+    achievements: List[Achievement] = Field(description="List of achievements")
+    next_milestones: List[Milestone] = Field(description="Next milestones to achieve")
+
+class ProfileCompletion(SQLModel):
+    """Model for profile completion response"""
+    completion_percentage: float = Field(description="Profile completion percentage")
+    completed_fields: int = Field(description="Number of completed fields")
+    total_fields: int = Field(description="Total number of required fields")
+    missing_fields: List[str] = Field(description="List of missing fields")
+    profile_level: str = Field(description="Profile completion level")
+
+class UserProfileUpdate(SQLModel):
+    """Model for updating user profile information"""
+    first_name: Optional[str] = Field(default=None, description="User's first name")
+    last_name: Optional[str] = Field(default=None, description="User's last name")
+    native_language: Optional[str] = Field(default=None, description="User's native language")
+    country: Optional[str] = Field(default=None, description="User's country")
+    interests: Optional[str] = Field(default=None, description="User's interests")
+    proficiency_level: Optional[str] = Field(default=None, description="User's proficiency level")
+    bio: Optional[str] = Field(default=None, description="User's bio")
+    learning_goals: Optional[str] = Field(default=None, description="User's learning goals")
+    preferred_topics: Optional[str] = Field(default=None, description="Preferred conversation topics")
+    study_time_preference: Optional[str] = Field(default=None, description="Preferred study time")
+    avatar_url: Optional[str] = Field(default=None, description="User's avatar URL")
+
+class UserLevelUpdate(SQLModel):
+    """Model for updating user's language level"""
+    user_level: UserLevel = Field(description="New language level")
+
+class UserStatistics(SQLModel):
+    """Model for user learning statistics"""
+    total_conversations: int = Field(description="Total number of conversations")
+    total_messages: int = Field(description="Total number of messages sent")
+    streak_days: int = Field(description="Current login streak")
+    average_messages_per_conversation: float = Field(description="Average messages per conversation")
+    last_login: Optional[str] = Field(description="Last login timestamp")
+
+class UserProfileResponse(SQLModel):
+    """Complete user profile response"""
+    id: str = Field(description="User ID")
+    user_name: str = Field(description="Username")
+    user_level: str = Field(description="User's language level")
+    target_language: str = Field(description="Target language")
+    email: Optional[str] = Field(description="User's email")
+    first_name: Optional[str] = Field(description="User's first name")
+    last_name: Optional[str] = Field(description="User's last name")
+    native_language: Optional[str] = Field(description="User's native language")
+    country: Optional[str] = Field(description="User's country")
+    interests: Optional[List[str]] = Field(description="User's interests")
+    proficiency_level: Optional[str] = Field(description="User's proficiency level")
+    bio: Optional[str] = Field(description="User's bio")
+    learning_goals: Optional[str] = Field(description="User's learning goals")
+    preferred_topics: Optional[List[str]] = Field(description="Preferred conversation topics")
+    study_time_preference: Optional[str] = Field(description="Preferred study time")
+    avatar_url: Optional[str] = Field(description="User's avatar URL")
+    is_active: Optional[bool] = Field(default=True, description="Whether user account is active")
+    created_at: Optional[str] = Field(description="Account creation timestamp")
+    last_login: Optional[str] = Field(description="Last login timestamp")
+    statistics: Optional[UserStatistics] = Field(default=None, description="User learning statistics")
