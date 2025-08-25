@@ -1632,14 +1632,40 @@ def get_partners(
             query = query.eq("is_premade", is_premade)
         
         if user_name:
-            # Get user's custom partners
+            # Get user's custom partners + premade partners
             user_response = supabase_client.table("profiles").select("id").eq("user_name", user_name).execute()
             if user_response.data:
                 user_id = user_response.data[0]["id"]
-                query = query.eq("user_id", user_id)
-        
-        response = query.execute()
-        return response.data if response.data else []
+                # Get all partners and filter in Python to include both user's partners and premade partners
+                response = query.execute()
+                if response.data:
+                    filtered_partners = [
+                        partner for partner in response.data 
+                        if (partner.get("user_id") == user_id) or (partner.get("is_premade", False))
+                    ]
+                    return filtered_partners
+                return []
+            else:
+                # User not found, return only premade partners
+                response = query.execute()
+                if response.data:
+                    filtered_partners = [
+                        partner for partner in response.data 
+                        if partner.get("is_premade", False)
+                    ]
+                    return filtered_partners
+                return []
+        else:
+            # When no user_name provided (not logged in), only show premade partners
+            response = query.execute()
+            if response.data:
+                # Filter to only show premade partners when not logged in
+                filtered_partners = [
+                    partner for partner in response.data 
+                    if partner.get("is_premade", False)
+                ]
+                return filtered_partners
+            return []
         
     except Exception as e:
         logger.error(f"Error getting partners: {str(e)}")
