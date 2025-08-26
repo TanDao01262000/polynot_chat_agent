@@ -28,6 +28,7 @@ class User(SQLModel, table=True):
     user_level: UserLevel = Field(description="User's language proficiency level")
     target_language: str = Field(description="Language the user wants to learn (will be stored as array in DB)")
     email: str = Field(description="User's email address (required for account creation)")
+    password: str = Field(description="User's password (required for account creation)")
     first_name: Optional[str] = Field(default=None, description="User's first name")
     last_name: Optional[str] = Field(default=None, description="User's last name")
     native_language: Optional[str] = Field(default=None, description="User's native language")
@@ -58,6 +59,27 @@ class User(SQLModel, table=True):
         if not v or not v.strip():
             raise ValueError('Target language cannot be empty')
         return v.strip()
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if not v or len(v.strip()) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        return v.strip()
+
+class UserLogin(SQLModel):
+    """User login model"""
+    email: str = Field(description="User's email address")
+    password: str = Field(description="User's password")
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if not v or len(v.strip()) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        return v.strip()
+
+class PasswordResetRequest(SQLModel):
+    """Password reset request model"""
+    email: str = Field(description="User's email address")
 
 # ============================================================================
 # Partner Models

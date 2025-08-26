@@ -22,7 +22,8 @@ from src.models import (
     ChatRequest, ChatResponse, Feedback, ConversationHistory, User,
     UserLevel, Partner, CreatePartnerRequest, GreetRequest, GreetingResponse,
     ConversationThread, Message, UserProfileUpdate, UserLevelUpdate, 
-    UserStatistics, UserProfileResponse, UserAchievements, ProfileCompletion
+    UserStatistics, UserProfileResponse, UserAchievements, ProfileCompletion,
+    UserLogin, PasswordResetRequest
 )
 from src.feedback_tool import feedback_tool
 from src.level_evaluator_tool import level_evaluator_tool
@@ -958,6 +959,13 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
         # Validate the provided email
         user_email = validate_email(user.email)
         
+        # Validate password
+        if not user.password or len(user.password.strip()) < 8:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password must be at least 8 characters long"
+            )
+        
         # Note: Removed pre-check to avoid race conditions
         # Database constraints will handle duplicate username/email errors properly
         
@@ -965,7 +973,7 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
         try:
             auth_response = supabase_client.auth.sign_up({
                 "email": user_email,
-                "password": "TestPassword123!",  # In production, this should be user-provided
+                "password": user.password,  # Use user-provided password
                 "options": {
                     "data": {
                         "user_name": validated_username,
@@ -1114,6 +1122,118 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating the user"
+        )
+
+@app.post("/auth/login")
+def login_user(login_data: UserLogin, supabase_client: Client = Depends(get_supabase)):
+    """Login user with email and password."""
+    try:
+        # Attempt to sign in with Supabase Auth
+        auth_response = supabase_client.auth.sign_in_with_password({
+            "email": login_data.email,
+            "password": login_data.password
+        })
+        
+        if not auth_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        
+        # Get user profile from database
+        profile_response = supabase_client.table("profiles").select("*").eq("email", login_data.email).execute()
+        
+        if not profile_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User profile not found"
+            )
+        
+        user_profile = profile_response.data[0]
+        
+        # Update last login
+        supabase_client.table("profiles").update({
+            "last_login": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", user_profile["id"]).execute()
+        
+        # Return user data with auth token
+        return {
+            "user": {
+                "id": user_profile["id"],
+                "user_name": user_profile["user_name"],
+                "email": user_profile["email"],
+                "first_name": user_profile.get("first_name"),
+                "last_name": user_profile.get("last_name"),
+                "user_level": user_profile["user_level"],
+                "target_language": user_profile["target_language"][0] if user_profile["target_language"] else None,
+                "native_language": user_profile.get("native_language"),
+                "country": user_profile.get("country"),
+                "interests": user_profile.get("interests", []),
+                "bio": user_profile.get("bio"),
+                "learning_goals": user_profile.get("learning_goals"),
+                "preferred_topics": user_profile.get("preferred_topics", []),
+                "study_time_preference": user_profile.get("study_time_preference"),
+                "avatar_url": user_profile.get("avatar_url"),
+                "total_conversations": user_profile.get("total_conversations", 0),
+                "total_messages": user_profile.get("total_messages", 0),
+                "streak_days": user_profile.get("streak_days", 0),
+                "created_at": user_profile["created_at"]
+            },
+            "access_token": auth_response.session.access_token,
+            "refresh_token": auth_response.session.refresh_token,
+            "expires_at": auth_response.session.expires_at
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Login error: {error_msg}")
+        
+        # Handle specific Supabase Auth errors
+        if "Invalid login credentials" in error_msg or "Invalid email or password" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        elif "Email not confirmed" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email not confirmed. Please check your email and confirm your account."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Login failed: {error_msg}"
+            )
+
+@app.post("/auth/logout")
+def logout_user(supabase_client: Client = Depends(get_supabase)):
+    """Logout user."""
+    try:
+        # Sign out from Supabase Auth
+        supabase_client.auth.sign_out()
+        return {"message": "Successfully logged out"}
+    except Exception as e:
+        logger.error(f"Logout error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Logout failed"
+        )
+
+@app.post("/auth/reset-password")
+def reset_password(reset_request: PasswordResetRequest, supabase_client: Client = Depends(get_supabase)):
+    """Send password reset email."""
+    try:
+        # Send password reset email via Supabase Auth
+        supabase_client.auth.reset_password_email(reset_request.email)
+        return {"message": "Password reset email sent"}
+    except Exception as e:
+        logger.error(f"Password reset error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send password reset email"
         )
 
 @app.get("/users/{user_name}")

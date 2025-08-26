@@ -65,8 +65,13 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 
 ## API Endpoints
 
+### Authentication
+- `POST /auth/login` - Login with email and password
+- `POST /auth/logout` - Logout user
+- `POST /auth/reset-password` - Send password reset email
+
 ### User Management
-- `POST /users/` - Create a new user (requires email)
+- `POST /users/` - Create a new user (requires email and password)
 - `GET /users/{user_name}` - Get user information
 - `DELETE /users/{user_name}` - Delete user account
 - `PATCH /users/{user_name}` - Update user's language level
