@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  polynot-chat-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: polynot-chat-agent-prod
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount environment file
+      - ./.env:/app/.env:ro
+      # Mount checkpoint database for persistence
+      - ./checkpoint.sqlite:/app/checkpoint.sqlite
+      - ./checkpoint.sqlite-shm:/app/checkpoint.sqlite-shm
+      - ./checkpoint.sqlite-wal:/app/checkpoint.sqlite-wal
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - polynot-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Optional: Add nginx reverse proxy for production
+  nginx:
+    image: nginx:alpine
+    container_name: polynot-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - polynot-chat-agent
+    restart: unless-stopped
+    networks:
+      - polynot-network
+
+networks:
+  polynot-network:
+    driver: bridge
+

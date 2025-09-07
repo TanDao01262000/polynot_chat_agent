@@ -65,6 +65,19 @@ class User(SQLModel, table=True):
         if not v or len(v.strip()) < 8:
             raise ValueError('Password must be at least 8 characters long')
         return v.strip()
+    
+    @validator('user_level')
+    def validate_user_level_field(cls, v):
+        if isinstance(v, str):
+            # Convert string to UserLevel enum
+            v = v.strip().upper()
+            if v not in ["A1", "A2", "B1", "B2", "C1", "C2"]:
+                raise ValueError(f'Invalid user level: {v}. Must be one of: A1, A2, B1, B2, C1, C2')
+            return UserLevel(v)
+        elif isinstance(v, UserLevel):
+            return v
+        else:
+            raise ValueError('User level must be a string or UserLevel enum')
 
 class UserLogin(SQLModel):
     """User login model"""
@@ -262,6 +275,8 @@ class UserProfileUpdate(SQLModel):
     preferred_topics: Optional[str] = Field(default=None, description="Preferred conversation topics")
     study_time_preference: Optional[str] = Field(default=None, description="Preferred study time")
     avatar_url: Optional[str] = Field(default=None, description="User's avatar URL")
+    user_level: Optional[UserLevel] = Field(default=None, description="User's language proficiency level")
+    target_language: Optional[str] = Field(default=None, description="Language the user wants to learn")
 
 class UserLevelUpdate(SQLModel):
     """Model for updating user's language level"""

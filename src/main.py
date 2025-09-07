@@ -692,6 +692,41 @@ def detailed_health_check():
             "timestamp": datetime.now().isoformat()
         }
 
+@app.get("/debug/user-levels")
+def debug_user_levels():
+    """Debug endpoint to check available user levels and enum values."""
+    try:
+        from src.models import UserLevel
+        
+        return {
+            "available_levels": [level.value for level in UserLevel],
+            "level_enum": {
+                level.name: level.value for level in UserLevel
+            },
+            "cefr_levels": {
+                "A1": "Beginner",
+                "A2": "Elementary", 
+                "B1": "Intermediate",
+                "B2": "Upper Intermediate",
+                "C1": "Advanced",
+                "C2": "Mastery"
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.patch("/debug/test-patch")
+def debug_test_patch():
+    """Debug endpoint to test PATCH method functionality."""
+    return {
+        "message": "PATCH method is working",
+        "timestamp": datetime.now().isoformat()
+    }
+
 # ============================================================================
 # Migration Helper Endpoints
 # ============================================================================
@@ -756,6 +791,18 @@ def migrate_user_profiles(supabase_client: Client = Depends(get_supabase)):
 # Enhanced Validation Functions
 # ============================================================================
 
+def clean_username(username: str) -> str:
+    """Clean username by removing invisible characters and normalizing"""
+    if not username:
+        return username
+    
+    # Remove invisible characters and normalize
+    import unicodedata
+    # Remove zero-width characters and normalize
+    cleaned = ''.join(char for char in username if unicodedata.category(char) != 'Cf')
+    cleaned = unicodedata.normalize('NFKC', cleaned)
+    return cleaned.strip()
+
 def validate_username(username: str) -> str:
     """Enhanced username validation with better rules"""
     if not username or not username.strip():
@@ -764,7 +811,8 @@ def validate_username(username: str) -> str:
             detail="Username cannot be empty"
         )
     
-    username = username.strip()
+    # Clean the username first
+    username = clean_username(username)
     
     # Check for minimum and maximum length
     if len(username) < 3:
@@ -830,6 +878,25 @@ def validate_email(email: str) -> str:
         )
     
     return email
+
+def validate_user_level(user_level: str) -> str:
+    """Validate user level is a valid CEFR level"""
+    if not user_level or not user_level.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User level cannot be empty"
+        )
+    
+    user_level = user_level.strip().upper()
+    valid_levels = ["A1", "A2", "B1", "B2", "C1", "C2"]
+    
+    if user_level not in valid_levels:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid user level '{user_level}'. Valid levels are: {', '.join(valid_levels)}"
+        )
+    
+    return user_level
 
 def check_user_exists(username: str, email: str, supabase_client: Client) -> tuple[bool, bool]:
     """Check if user exists by username or email, returns (username_exists, email_exists)"""
@@ -966,6 +1033,9 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
                 detail="Password must be at least 8 characters long"
             )
         
+        # Validate user level
+        validated_user_level = validate_user_level(user.user_level)
+        
         # Note: Removed pre-check to avoid race conditions
         # Database constraints will handle duplicate username/email errors properly
         
@@ -1009,10 +1079,15 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
         # Generate a UUID for the profiles table
         import uuid
         profile_id = str(uuid.uuid4())
+        # Log the user level being set
+        logger.info(f"Creating user {validated_username} with level: {validated_user_level}")
+        logger.info(f"Original user.user_level: {user.user_level}")
+        logger.info(f"Validated user level: {validated_user_level}")
+        
         profile_data = {
             "id": profile_id,
             "user_name": validated_username,
-            "user_level": user.user_level,
+            "user_level": validated_user_level,
             "target_language": [user.target_language] if user.target_language else [],
             "email": user_email,
             "first_name": user.first_name,
@@ -1037,8 +1112,11 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
         # Insert into profiles table with simplified error handling
         response = None
         try:
+            logger.info(f"Inserting profile data: {profile_data}")
             response = supabase_client.table("profiles").insert(profile_data).execute()
             logger.info(f"Database insert completed successfully")
+            if response.data:
+                logger.info(f"Inserted user level in DB: {response.data[0].get('user_level')}")
         except Exception as db_error:
             error_msg = str(db_error)
             logger.error(f"Database error creating profile: {error_msg}")
@@ -1053,12 +1131,33 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
         if response and response.data:
             logger.info(f"Response data length: {len(response.data)}")
             logger.info(f"First item in response data: {response.data[0]}")
+            logger.info(f"User level stored in database: {response.data[0]['user_level']}")
+            
+            # WORKAROUND: If the database defaulted the level to A1 but we requested a different level,
+            # update it immediately
+            stored_level = response.data[0]["user_level"]
+            if stored_level == "A1" and validated_user_level != "A1":
+                logger.warning(f"Database defaulted level to A1, but user requested {validated_user_level}. Updating...")
+                try:
+                    # Update the user level immediately
+                    update_response = supabase_client.table("profiles").update({
+                        "user_level": validated_user_level,
+                        "updated_at": datetime.now().isoformat()
+                    }).eq("user_name", validated_username).execute()
+                    
+                    if update_response.data:
+                        logger.info(f"Successfully updated user level from A1 to {validated_user_level}")
+                        stored_level = validated_user_level
+                    else:
+                        logger.error(f"Failed to update user level from A1 to {validated_user_level}")
+                except Exception as update_error:
+                    logger.error(f"Error updating user level: {str(update_error)}")
             
             # Return the user data in the expected format
             user_data = {
                 "id": response.data[0]["id"],
                 "user_name": response.data[0]["user_name"],
-                "user_level": response.data[0]["user_level"],
+                "user_level": validated_user_level,
                 "target_language": response.data[0]["target_language"][0] if response.data[0]["target_language"] else user.target_language,
                 "email": response.data[0].get("email"),
                 "first_name": response.data[0].get("first_name"),
@@ -1087,7 +1186,7 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
                     return {
                         "id": user_data["id"],
                         "user_name": user_data["user_name"],
-                        "user_level": user_data["user_level"],
+                        "user_level": validated_user_level,
                         "target_language": user_data["target_language"][0] if user_data["target_language"] else user.target_language,
                         "email": user_data.get("email"),
                         "first_name": user_data.get("first_name"),
@@ -1313,27 +1412,55 @@ def get_user_profile(user_name: str, supabase_client: Client = Depends(get_supab
         )
 
 @app.patch("/users/{user_name}/profile")
+@app.put("/users/{user_name}/profile")
 def update_user_profile(
     user_name: str, 
     profile_update: UserProfileUpdate, 
     supabase_client: Client = Depends(get_supabase)
 ):
     """Update user profile information."""
+    logger.info(f"Profile update endpoint called for user: {user_name}")
     try:
+        # Clean username to remove any invisible characters
+        clean_username_value = clean_username(user_name)
+        logger.info(f"Profile update request for user: '{clean_username_value}' (original: '{user_name}')")
+        
+        # Log the incoming request data
+        try:
+            # Try new Pydantic v2 method first
+            request_data = profile_update.model_dump(exclude_unset=True)
+        except AttributeError:
+            # Fallback to Pydantic v1 method
+            request_data = profile_update.dict(exclude_unset=True)
+        logger.info(f"Profile update request data: {request_data}")
+        
         # Check if user exists
-        user_response = supabase_client.table("profiles").select("id").eq("user_name", user_name).execute()
+        user_response = supabase_client.table("profiles").select("id").eq("user_name", clean_username_value).execute()
         if not user_response.data:
+            logger.error(f"User not found: '{clean_username_value}'")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
         
+        logger.info(f"User found: {user_response.data[0]['id']}")
+        
         # Prepare update data (only include non-None values)
         update_data = {}
-        for field, value in profile_update.dict(exclude_unset=True).items():
+        for field, value in request_data.items():
             if value is not None:
+                # Handle user_level validation
+                if field == "user_level":
+                    validated_level = validate_user_level(value)
+                    update_data[field] = validated_level
+                # Handle target_language as array
+                elif field == "target_language":
+                    if value:
+                        update_data[field] = [value]
+                    else:
+                        update_data[field] = []
                 # Handle array fields - convert comma-separated strings to arrays
-                if field in ["interests", "preferred_topics"] and isinstance(value, str):
+                elif field in ["interests", "preferred_topics"] and isinstance(value, str):
                     # Convert comma-separated string to array format using the helper function
                     update_data[field] = handle_array_field_conversion(field, value)
                 elif field in ["interests", "preferred_topics"] and isinstance(value, list):
@@ -1342,7 +1469,10 @@ def update_user_profile(
                 else:
                     update_data[field] = value
         
+        logger.info(f"Prepared update data: {update_data}")
+        
         if not update_data:
+            logger.error("No valid fields to update - all fields are None or empty")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No valid fields to update"
@@ -1352,11 +1482,14 @@ def update_user_profile(
         update_data["updated_at"] = datetime.now().isoformat()
         
         # Update user profile
-        response = supabase_client.table("profiles").update(update_data).eq("user_name", user_name).execute()
+        logger.info(f"Updating profile for user: {clean_username_value}")
+        response = supabase_client.table("profiles").update(update_data).eq("user_name", clean_username_value).execute()
         
         if response.data:
+            logger.info(f"Profile updated successfully for user: {clean_username_value}")
             return response.data[0]
         else:
+            logger.error(f"Supabase update returned no data for user: {clean_username_value}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed to update user profile"
@@ -1365,10 +1498,82 @@ def update_user_profile(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating user profile: {str(e)}")
+        logger.error(f"Error updating user profile for '{user_name}': {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user profile"
+        )
+
+@app.patch("/users/{user_name}")
+@app.put("/users/{user_name}")
+def update_user_general(
+    user_name: str, 
+    user_update: dict, 
+    supabase_client: Client = Depends(get_supabase)
+):
+    """General user update endpoint that can handle both profile and level updates."""
+    logger.info(f"General user update endpoint called for user: {user_name}")
+    try:
+        # Check if user exists
+        user_response = supabase_client.table("profiles").select("id").eq("user_name", user_name).execute()
+        if not user_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # Prepare update data
+        update_data = {}
+        
+        # Handle user_level updates
+        if "user_level" in user_update:
+            validated_level = validate_user_level(user_update["user_level"])
+            update_data["user_level"] = validated_level
+        
+        # Handle profile updates (all other fields)
+        profile_fields = [
+            "first_name", "last_name", "native_language", "country", 
+            "interests", "bio", "learning_goals", "preferred_topics", 
+            "study_time_preference", "avatar_url", "proficiency_level",
+            "target_language"
+        ]
+        
+        for field in profile_fields:
+            if field in user_update:
+                if field in ["interests", "preferred_topics"]:
+                    # Handle array fields
+                    update_data[field] = handle_array_field_conversion(field, user_update[field] or "")
+                elif field == "target_language":
+                    # Handle target_language as array
+                    if user_update[field]:
+                        update_data[field] = [user_update[field]]
+                    else:
+                        update_data[field] = []
+                else:
+                    update_data[field] = user_update[field]
+        
+        # Add timestamp
+        update_data["updated_at"] = datetime.now().isoformat()
+        
+        # Update user
+        response = supabase_client.table("profiles").update(update_data).eq("user_name", user_name).execute()
+        
+        if response.data:
+            logger.info(f"Successfully updated user: {user_name}")
+            return response.data[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update user"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating user {user_name}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update user"
         )
 
 @app.patch("/users/{user_name}/level")
