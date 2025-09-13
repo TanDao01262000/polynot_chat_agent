@@ -1,4 +1,4 @@
-# Use official Python image
+# Production Dockerfile for PolyNot Chat Agent
 FROM python:3.11-slim
 
 # Set environment variables
@@ -19,12 +19,14 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Create directories for volume mounting
-RUN mkdir -p /app/src /app/docs_and_tests
-
-# Copy initial source code (will be overridden by volume mount in development)
+# Copy application code
 COPY src/ ./src/
 COPY docs_and_tests/ ./docs_and_tests/
+
+# Create non-root user for security
+RUN adduser --disabled-password --gecos '' appuser && \
+    chown -R appuser:appuser /app
+USER appuser
 
 # Expose port
 EXPOSE 8000
@@ -33,6 +35,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the FastAPI app with uvicorn
-# Use --reload for development (auto-restart on code changes)
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Run the FastAPI app with uvicorn (production mode - no reload)
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+
+
+

@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  polynot-chat-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: polynot-chat-agent
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source code for live reloading
+      - ./src:/app/src
+      - ./docs_and_tests:/app/docs_and_tests
+      # Mount requirements.txt for dependency updates
+      - ./requirements.txt:/app/requirements.txt
+      # Mount environment file
+      - ./.env:/app/.env
+      # Mount checkpoint database for persistence
+      - ./checkpoint.sqlite:/app/checkpoint.sqlite
+      - ./checkpoint.sqlite-shm:/app/checkpoint.sqlite-shm
+      - ./checkpoint.sqlite-wal:/app/checkpoint.sqlite-wal
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - polynot-network
+
+  # Optional: Add a database service if needed
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: polynot-postgres
+  #   environment:
+  #     POSTGRES_DB: polynot
+  #     POSTGRES_USER: polynot_user
+  #     POSTGRES_PASSWORD: polynot_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   networks:
+  #     - polynot-network
+
+networks:
+  polynot-network:
+    driver: bridge
+
+# volumes:
+#   postgres_data:
+
+
+
