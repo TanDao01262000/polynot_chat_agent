@@ -176,3 +176,5 @@ polynot_chat_agent/
 
 The docker-compose.yml includes commented sections for additional services like PostgreSQL. Uncomment and configure as needed for your use case.
 
+
+

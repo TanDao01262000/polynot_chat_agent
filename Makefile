@@ -66,7 +66,7 @@ test-level:
 
 # Run API server locally
 run-local:
-	source .venv/bin/activate && python src/main.py
+	source .venv/bin/activate && PYTHONPATH=. uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
 # Check code quality
 lint:
