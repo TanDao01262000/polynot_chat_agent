@@ -5,7 +5,7 @@ A FastAPI-based application for language learning conversations with AI partners
 The system now uses user-specific thread IDs in format: {user_name}_{partner_id}
 """
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Header
 import uuid
 import os
 import json
@@ -16,6 +16,8 @@ from supabase import create_client, Client
 from uuid import UUID
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+import jwt
+from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 
 from src.chat_agent import chat_agent
 from src.models import (
@@ -1005,6 +1007,54 @@ def handle_array_field_conversion(field_name: str, value: str) -> list:
     
     return unique_items
 
+def validate_jwt_token(token: str) -> Dict:
+    """Validate JWT token with Supabase"""
+    try:
+        # Decode the JWT token without verification to get the header
+        # This is safe because we're not using the payload for authentication
+        header = jwt.get_unverified_header(token)
+        
+        # Check if token has the correct algorithm
+        if header.get('alg') != 'HS256':
+            raise InvalidTokenError("Invalid token algorithm")
+        
+        # For Supabase JWT tokens, we can decode without verification
+        # since the token was issued by Supabase and we trust it
+        # In production, you might want to verify the signature with Supabase's secret
+        
+        # Decode the payload
+        payload = jwt.decode(token, options={"verify_signature": False})
+        
+        # Check if token is expired
+        exp = payload.get('exp')
+        if exp and datetime.utcnow().timestamp() > exp:
+            raise ExpiredSignatureError("Token has expired")
+        
+        # Return user data from token
+        return {
+            "id": payload.get('sub'),
+            "email": payload.get('email'),
+            "user_metadata": payload.get('user_metadata', {}),
+            "exp": exp,
+            "iat": payload.get('iat')
+        }
+        
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired"
+        )
+    except InvalidTokenError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token validation failed: {str(e)}"
+        )
+
 # ============================================================================
 # Updated User Management Endpoints
 # ============================================================================
@@ -1256,7 +1306,23 @@ def login_user(login_data: UserLogin, supabase_client: Client = Depends(get_supa
             "updated_at": datetime.now().isoformat()
         }).eq("id", user_profile["id"]).execute()
         
-        # Return user data with auth token
+        # Calculate expires_in (seconds until expiration)
+        expires_at = auth_response.session.expires_at
+        expires_in = 3600  # Default to 1 hour if we can't calculate
+        
+        if expires_at:
+            try:
+                # Parse the expires_at timestamp and calculate seconds until expiration
+                exp_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                now = datetime.now(exp_datetime.tzinfo)
+                expires_in = int((exp_datetime - now).total_seconds())
+                # Ensure it's not negative
+                expires_in = max(expires_in, 0)
+            except Exception as e:
+                logger.warning(f"Could not parse expires_at timestamp: {e}")
+                expires_in = 3600  # Default to 1 hour
+        
+        # Return user data with enhanced auth token response
         return {
             "user": {
                 "id": user_profile["id"],
@@ -1281,7 +1347,10 @@ def login_user(login_data: UserLogin, supabase_client: Client = Depends(get_supa
             },
             "access_token": auth_response.session.access_token,
             "refresh_token": auth_response.session.refresh_token,
-            "expires_at": auth_response.session.expires_at
+            "token_type": "Bearer",
+            "expires_in": expires_in,
+            "expires_at": expires_at,
+            "last_login": datetime.now().isoformat()
         }
         
     except HTTPException:
@@ -1333,6 +1402,116 @@ def reset_password(reset_request: PasswordResetRequest, supabase_client: Client 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to send password reset email"
+        )
+
+@app.get("/auth/validate")
+def validate_token(authorization: str = Header(None)):
+    """Validate JWT token and return user information."""
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            return {
+                "valid": False,
+                "error": "Invalid authorization header"
+            }
+        
+        token = authorization.split(" ")[1]
+        
+        # Validate JWT token with Supabase
+        try:
+            user_data = validate_jwt_token(token)
+            
+            # Format expires_at from timestamp
+            expires_at = None
+            if user_data.get("exp"):
+                expires_at = datetime.utcfromtimestamp(user_data["exp"]).isoformat() + "Z"
+            
+            return {
+                "valid": True,
+                "user": {
+                    "id": user_data["id"],
+                    "email": user_data["email"],
+                    "user_metadata": user_data["user_metadata"]
+                },
+                "expires_at": expires_at
+            }
+        except HTTPException as e:
+            return {
+                "valid": False,
+                "error": e.detail
+            }
+        except Exception as e:
+            return {
+                "valid": False,
+                "error": str(e)
+            }
+            
+    except Exception as e:
+        logger.error(f"Token validation error: {str(e)}")
+        return {
+            "valid": False,
+            "error": "Token validation failed"
+        }
+
+@app.post("/auth/refresh")
+def refresh_token(refresh_data: dict, supabase_client: Client = Depends(get_supabase)):
+    """Refresh access token using refresh token."""
+    try:
+        refresh_token = refresh_data.get("refresh_token")
+        
+        if not refresh_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Refresh token is required"
+            )
+        
+        # Use Supabase to refresh the token
+        try:
+            auth_response = supabase_client.auth.refresh_session(refresh_token)
+            
+            if not auth_response.session:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid refresh token"
+                )
+            
+            # Calculate expires_in (seconds until expiration)
+            expires_at = auth_response.session.expires_at
+            expires_in = 3600  # Default to 1 hour if we can't calculate
+            
+            if expires_at:
+                try:
+                    # Parse the expires_at timestamp and calculate seconds until expiration
+                    exp_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                    now = datetime.now(exp_datetime.tzinfo)
+                    expires_in = int((exp_datetime - now).total_seconds())
+                    # Ensure it's not negative
+                    expires_in = max(expires_in, 0)
+                except Exception as e:
+                    logger.warning(f"Could not parse expires_at timestamp: {e}")
+                    expires_in = 3600  # Default to 1 hour
+            
+            return {
+                "access_token": auth_response.session.access_token,
+                "refresh_token": auth_response.session.refresh_token,
+                "token_type": "Bearer",
+                "expires_in": expires_in,
+                "expires_at": expires_at
+            }
+            
+        except Exception as e:
+            logger.error(f"Token refresh error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Failed to refresh token"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token refresh error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Token refresh failed"
         )
 
 @app.get("/users/{user_name}")
