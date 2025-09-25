@@ -1,346 +1,251 @@
 # PolyNot Language Learning API
 
-A revolutionary language learning platform that provides authentic conversational experiences through AI-powered partners with distinct personalities, backgrounds, and expertise.
+A comprehensive language learning platform with AI-powered chat, social features, and intelligent learning analytics.
 
-## Prerequisites
+## 🚀 Features
 
-- Python 3.11+
-- pip (Python package manager)
-- virtualenv (recommended)
+### Core Learning
+- **AI Chat Agent**: Intelligent conversation practice with LangChain/LangGraph
+- **Level Evaluation**: Automatic assessment of user language levels
+- **Feedback System**: Real-time learning feedback and suggestions
 
-## Environment Setup
+### Social Learning
+- **Social Posts**: Share learning experiences and achievements
+- **Smart Feed**: Personalized content based on user level and preferences
+- **Leaderboards**: Global and level-based rankings
+- **Points System**: Gamified learning with points and achievements
+- **Study Analytics**: Global word usage analytics and insights
 
-1. Create and activate a virtual environment:
+### Integration Ready
+- **AI Vocab Integration**: Connect with AI vocabulary generation systems
+- **Flashcard Integration**: Connect with spaced repetition systems
+- **Points API**: Award points for external learning activities
 
-```bash
-# Create virtual environment
-python -m venv .venv
+## 📁 Project Structure
 
-# Activate virtual environment
-# On Windows:
-.venv\Scripts\activate
-
-# On macOS/Linux:
-source .venv/bin/activate
+```
+polynot_chat_agent/
+├── src/                          # Main application code
+│   ├── main.py                  # FastAPI application
+│   ├── chat_agent.py            # AI chat agent
+│   ├── social_service.py        # Social features service
+│   ├── smart_feed_service.py    # Intelligent feed service
+│   ├── study_analytics_service.py # Study analytics service
+│   ├── social_integration.py    # Auto-posting integration
+│   ├── social_models.py         # Data models
+│   └── models.py                # Core models
+├── docs/                        # Documentation
+│   ├── integration/             # Integration guides
+│   └── social/                  # Social features docs
+├── docs_and_tests/             # API documentation
+├── social_migration.sql         # Database schema
+└── requirements.txt            # Dependencies
 ```
 
-2. Install dependencies:
+## 🛠️ Quick Start
 
+### Prerequisites
+- Python 3.11+
+- Supabase account
+- Virtual environment
+
+### Installation
+
+1. **Clone and setup**:
+```bash
+git clone <repository>
+cd polynot_chat_agent
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+2. **Install dependencies**:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-1. Create a `.env` file in the root directory:
-
+3. **Setup database**:
 ```bash
-# OpenAI API Key
-OPENAI_API_KEY=your_openai_api_key
-
-# LangSmith Configuration (optional)
-LANGSMITH_API_KEY=your_langsmith_api_key
-LANGSMITH_PROJECT=polynot
-
-# Supabase Configuration
-SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
+# Run the migration script in your Supabase SQL editor
+cat social_migration.sql
 ```
 
-## Running the Server
-
-1. Start the FastAPI server:
-
+4. **Configure environment**:
 ```bash
-# Development mode
-uvicorn src.main:app --reload
+# Set your Supabase credentials
+export SUPABASE_URL="your-supabase-url"
+export SUPABASE_KEY="your-supabase-key"
+```
 
-# Production mode
+5. **Start the server**:
+```bash
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+## 📚 Documentation
+
+### API Documentation
+- **Complete Guide**: `docs_and_tests/COMPLETE_GUIDE.md`
+- **API Reference**: `docs_and_tests/API_REFERENCE.md`
+- **Technical Docs**: `docs_and_tests/TECHNICAL_DOCUMENTATION.md`
+
+### Integration Guides
+- **Server Integration**: `docs/integration/SERVER_INTEGRATION_DOCS.md`
+- **Quick Setup**: `docs/integration/QUICK_SETUP_GUIDE.md`
+- **AI System Integration**: `docs/integration/AI_SYSTEM_INTEGRATION_GUIDE.md`
+
+### Social Features
+- **Social Overview**: `docs/social/README.md`
+- **Points Integration**: `docs/integration/points_integration_example.py`
+
+## 🔗 API Endpoints
+
+### Core Learning
+- `POST /chat` - AI conversation practice
+- `GET /users/{user_name}` - Get user profile
+- `POST /users/` - Create user account
+
+### Social Features
+- `POST /social/posts` - Create social post
+- `GET /social/feed` - Get personalized feed
+- `GET /social/leaderboard` - Get global leaderboard
+- `GET /social/users/{user_name}/points` - Get user points
+
+### Study Analytics
+- `POST /study/record-word` - Record word study
+- `GET /study/analytics` - Get study analytics
+- `GET /study/trending-words` - Get trending words
+
+## 🔧 Integration
+
+### For AI Vocab Servers
+```python
+from docs.integration.points_integration_example import AIVocabPoints
+
+vocab_points = AIVocabPoints()
+result = vocab_points.award_vocab_generation_points(
+    user_name="user123",
+    words_generated=20,
+    level="A2"
+)
+```
+
+### For Flashcard Servers
+```python
+from docs.integration.points_integration_example import FlashcardPoints
+
+flashcard_points = FlashcardPoints()
+result = flashcard_points.award_flashcard_review_points(
+    user_name="user123",
+    cards_reviewed=20,
+    difficulty="medium"
+)
+```
+
+## 🎯 Key Features
+
+### Social Learning Platform
+- **Multi-user support** with different language levels (A1-C1)
+- **Real-time leaderboards** with points and achievements
+- **Smart feed** with level-based content filtering
+- **Study analytics** with global word usage insights
+- **Privacy controls** for user data protection
+
+### Points System
+- **Automatic point awarding** for learning activities
+- **Level-based point scaling** (A1: 15-25 points, C1: 40-80 points)
+- **Achievement system** with badges and milestones
+- **Social competition** with global rankings
+
+### AI Integration
+- **LangChain/LangGraph** for intelligent conversations
+- **Level evaluation** with automatic assessment
+- **Feedback system** with personalized suggestions
+- **Social integration** with auto-posting capabilities
+
+## 🚀 Deployment
+
+### Docker
+```bash
+# Development
+docker-compose up
+
+# Production
+docker-compose -f docker-compose.prod.yml up
+```
+
+### Manual Deployment
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run migrations
+# (Execute social_migration.sql in Supabase)
+
+# Start server
 uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
 
-2. Access the API documentation:
-   - Swagger UI: http://localhost:8000/docs
-   - ReDoc: http://localhost:8000/redoc
+## 🧪 Testing
 
-## API Endpoints
+The API includes comprehensive testing capabilities:
 
-### Authentication
-- `POST /auth/login` - Login with email and password
-- `POST /auth/logout` - Logout user
-- `POST /auth/reset-password` - Send password reset email
-
-### User Management
-- `POST /users/` - Create a new user (requires email and password)
-- `GET /users/{user_name}` - Get user information
-- `DELETE /users/{user_name}` - Delete user account
-- `PATCH /users/{user_name}` - Update user's language level
-
-### User Profile Management
-- `GET /users/{user_name}/profile` - Get complete user profile with statistics
-- `PATCH /users/{user_name}/profile` - Update user profile information
-- `PATCH /users/{user_name}/level` - Update user's language level
-- `GET /users/{user_name}/statistics` - Get user learning statistics
-- `POST /users/{user_name}/login` - Record user login and update streak
-- `GET /users/{user_name}/profile/completion` - Get profile completion percentage
-- `GET /users/{user_name}/profile/achievements` - Get user achievements
-- `POST /migrate/user-profiles` - Migrate existing users to new profile system
-
-### Partner Management
-- `POST /partners/` - Create a new custom partner
-- `GET /partners/` - Get all partners (with optional filters)
-- `GET /partners/{user_name}` - Get user's custom partners
-
-### Chat & Conversation
-- `POST /chat` - Start or continue a conversation
-- `GET /threads/{thread_id}/messages` - Get conversation history
-
-### Analysis & Feedback
-- `POST /feedback` - Get detailed feedback on a conversation
-- `POST /evaluate` - Evaluate user's language level
-
-### Health & Status
-- `GET /` - Basic health check
-- `GET /health` - Detailed health check
-- `GET /test/all-endpoints` - Comprehensive system test
-
-## User Creation & Login
-
-### User Creation Requirements
-
-**Required Fields:**
-- `user_name`: 3-30 characters, no spaces, alphanumeric + underscore/hyphen only
-- `user_level`: One of A1, A2, B1, B2, C1, C2
-- `target_language`: Language to learn (e.g., "English", "Spanish")
-- `email`: Real email address (Gmail, Yahoo, Outlook, etc.)
-
-**Username Rules:**
-- ✅ Valid: `john_doe`, `john-doe`, `johndoe`, `user123`
-- ❌ Invalid: `john doe` (spaces), `123user` (starts with number), `admin` (reserved)
-
-**Example:**
 ```bash
+# Test social features
+curl -X GET "http://localhost:8000/health"
+
+# Test user creation
 curl -X POST "http://localhost:8000/users/" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "user_name": "john_doe",
-       "user_level": "A2",
-       "target_language": "English",
-       "email": "john.doe@gmail.com"
-     }'
+  -H "Content-Type: application/json" \
+  -d '{"user_name": "testuser", "user_level": "A2", "target_language": "English", "email": "test@example.com", "password": "password123"}'
+
+# Test social features
+curl -X GET "http://localhost:8000/social/leaderboard"
 ```
 
-### Login
+## 📊 Database Schema
 
-**Login only requires username:**
-```bash
-curl -X POST "http://localhost:8000/users/john_doe/login"
-```
+The system uses Supabase with the following key tables:
+- `profiles` - User profiles and settings
+- `social_posts` - Social posts and content
+- `user_points` - Points and achievements
+- `word_study_records` - Study analytics
+- `global_word_analytics` - Global word usage
 
-**Response:**
-```json
-{
-  "message": "Login recorded successfully",
-  "streak_days": 1,
-  "last_login": "2025-08-22T20:55:26.569"
-}
-```
+## 🔒 Security
 
-## Testing
+- **Row Level Security (RLS)** enabled on all tables
+- **JWT authentication** for user sessions
+- **Input validation** with Pydantic models
+- **SQL injection protection** with parameterized queries
 
-### Quick API Test
+## 📈 Performance
 
-```bash
-# Health check
-curl http://localhost:8000/health
+- **Async/await** for non-blocking operations
+- **Database indexing** for fast queries
+- **Connection pooling** with Supabase
+- **Caching** for frequently accessed data
 
-# Test all endpoints
-curl http://localhost:8000/test/all-endpoints
+## 🤝 Contributing
 
-# Create a test user
-curl -X POST "http://localhost:8000/users/" \
-     -H "Content-Type: application/json" \
-     -d '{"user_name": "test_user", "user_level": "A2", "target_language": "English"}'
-```
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
-### Comprehensive Test Suite
+## 📄 License
 
-```bash
-# Run the full test suite
-python docs_and_tests/test_enhanced_partner_system.py
-```
+This project is licensed under the MIT License.
 
-### API Testing
+## 🆘 Support
 
-1. Using Swagger UI:
-   - Open http://localhost:8000/docs
-   - Test endpoints directly from the interface
+For issues or questions:
+1. Check the documentation in `docs/`
+2. Review the API reference
+3. Test with the provided examples
+4. Check the logs for error details
 
-2. Using curl:
+---
 
-```bash
-# Create a new user
-curl -X POST "http://localhost:8000/users/" \
-     -H "Content-Type: application/json" \
-     -d '{"user_name": "test_user", "user_level": "A2", "target_language": "English"}'
-
-# Create a custom partner
-curl -X POST "http://localhost:8000/partners/?user_name=test_user" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "Tour Guide",
-       "ai_role": "friendly tour guide",
-       "scenario": "Exploring a new city with local insights",
-       "target_language": "English",
-       "user_level": "B1",
-       "personality": "Enthusiastic and knowledgeable about local culture",
-       "background": "Has been a tour guide for 5 years in this city",
-       "communication_style": "Friendly and informative, speaks clearly",
-       "expertise": "Local history, culture, and hidden gems",
-       "interests": "Local cuisine, photography, meeting people from different cultures"
-     }'
-
-# Start a chat with a partner
-curl -X POST "http://localhost:8000/chat" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "user_name": "test_user",
-       "thread_id": "123",
-       "user_input": "Hello!",
-       "partner_id": "partner_uuid"
-     }'
-
-# Test User Profile Feature
-curl -X POST "http://localhost:8000/users/" \
-     -H "Content-Type: application/json" \
-     -d '{"user_name": "profile_user", "user_level": "B1", "target_language": "English"}'
-
-# Update user profile
-curl -X PATCH "http://localhost:8000/users/profile_user/profile" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "email": "profile_user@example.com",
-       "first_name": "John",
-       "last_name": "Doe",
-       "bio": "Passionate language learner",
-       "native_language": "Spanish",
-       "learning_goals": "Become fluent in English for work",
-       "preferred_topics": "Business, travel, technology"
-     }'
-
-# Get complete user profile
-curl -X GET "http://localhost:8000/users/profile_user/profile"
-
-# Get user statistics
-curl -X GET "http://localhost:8000/users/profile_user/statistics"
-
-# Record user login
-curl -X POST "http://localhost:8000/users/profile_user/login"
-
-# Update user level
-curl -X PATCH "http://localhost:8000/users/profile_user/level" \
-     -H "Content-Type: application/json" \
-     -d '{"user_level": "B2"}'
-```
-
-### Available Premade Partners
-
-The API includes the following premade partners with detailed character profiles:
-
-1. **Emily Carter** (A2) - Coffee Shop Barista
-   - Warm, enthusiastic barista who loves coffee and helping customers
-2. **Michael Lee** (B2) - Hiring Manager
-   - Professional hiring manager conducting job interviews
-3. **Sophie Martin** (B1) - Date Partner
-   - Friendly person on a first date at a casual restaurant
-4. **Carlos Rivera** (B1) - Travel Agent
-   - Enthusiastic travel agent helping plan vacations
-5. **Dr. Olivia Smith** (B2) - Doctor
-   - Caring doctor in a medical consultation
-6. **Anna Kim** (A2) - Shop Assistant
-   - Friendly shop assistant helping with clothing purchases
-
-### Sample Partner Test
-
-Here's a complete example using a custom partner:
-
-```bash
-# 1. Create a user
-curl -X POST "http://localhost:8000/users/" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "user_name": "alex",
-       "user_level": "B1",
-       "target_language": "English"
-     }'
-
-# 2. Create a custom partner
-curl -X POST "http://localhost:8000/partners/?user_name=alex" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "City Tour Guide",
-       "ai_role": "friendly tour guide",
-       "scenario": "Exploring a new city with local insights",
-       "target_language": "English",
-       "user_level": "B1",
-       "personality": "Enthusiastic and knowledgeable about local culture",
-       "background": "Has been a tour guide for 5 years in this city",
-       "communication_style": "Friendly and informative, speaks clearly",
-       "expertise": "Local history, culture, and hidden gems",
-       "interests": "Local cuisine, photography, meeting people from different cultures"
-     }'
-
-# 3. Start conversation with the partner
-curl -X POST "http://localhost:8000/chat" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "user_name": "alex",
-       "thread_id": "tour_conversation_1",
-       "user_input": "Hi! I just arrived in the city and would love to explore some local places.",
-       "partner_id": "partner_uuid_from_step_2"
-     }'
-
-# 4. Get feedback
-curl -X POST "http://localhost:8000/feedback?user_name=alex&thread_id=tour_conversation_1"
-```
-
-To test in Swagger UI:
-1. Go to http://localhost:8000/docs
-2. Find the `/chat` endpoint
-3. Click "Try it out"
-4. Use this sample request body:
-```json
-{
-  "user_name": "alex",
-  "thread_id": "tour_conversation_1",
-  "user_input": "Hi! I just arrived in the city.",
-  "partner_id": "your_partner_id"
-}
-```
-
-## Database Schema
-
-The API uses Supabase with the following main tables:
-
-- `users` - User information and language levels
-- `partners` - Conversation partners (both premade and custom) with enhanced character profiles
-- `conversation_history` - Chat messages and conversation threads
-
-## Features
-
-- **Authentic AI Partners**: Realistic characters with detailed personalities, backgrounds, and expertise
-- **Natural Conversations**: Partners respond as real people, not language tutors
-- **Progress Tracking**: Automated level evaluation and detailed feedback
-- **Customizable Partners**: Create your own conversation partners with full character profiles
-- **Language Learning**: AI partners adapt to user's language level
-- **Conversation History**: Track and retrieve chat conversations
-- **Feedback System**: Get detailed feedback on conversations
-- **Level Evaluation**: Assess user's language progress
-
-## Documentation
-
-For comprehensive documentation, visit the [`docs_and_tests/`](docs_and_tests/) folder:
-
-- **[📖 Main Documentation](docs_and_tests/README.md)** - Complete project overview and quick start
-- **[🔧 Technical Documentation](docs_and_tests/TECHNICAL_DOCUMENTATION.md)** - Architecture, deployment, and development guide
-- **[📡 API Reference](docs_and_tests/API_REFERENCE.md)** - Complete API endpoints and examples
+**Built with ❤️ for language learners worldwide** 🌍

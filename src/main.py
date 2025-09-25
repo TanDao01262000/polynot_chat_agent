@@ -29,6 +29,18 @@ from src.models import (
 )
 from src.feedback_tool import feedback_tool
 from src.level_evaluator_tool import level_evaluator_tool
+from src.social_models import (
+    CreatePostRequest, PostResponse, CommentRequest, CommentResponse,
+    NewsFeedRequest, NewsFeedResponse, SocialUserProfileResponse,
+    FollowRequest, PointsSummary, LeaderboardResponse,
+    SmartFeedRequest, SmartFeedResponse, UserPrivacySettings, TrendingContent,
+    StudyAnalyticsRequest, StudyAnalyticsResponse, WordStudyRecord, GlobalWordAnalytics,
+    StudyInsights, WordRecommendation
+)
+from src.social_service import SocialService
+from src.social_integration import SocialIntegration
+from src.smart_feed_service import SmartFeedService
+from src.study_analytics_service import StudyAnalyticsService
 
 # ============================================================================
 # Configuration and Setup
@@ -53,12 +65,22 @@ os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 # Supabase configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in environment variables")
 
-# Initialize Supabase client
+# Initialize Supabase client with anon key for user operations
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+# Initialize service role client for server operations (bypasses RLS)
+if SUPABASE_SERVICE_ROLE_KEY:
+    supabase_service: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    logger.info("Supabase service role client initialized successfully")
+else:
+    supabase_service = supabase  # Fallback to anon key
+    logger.warning("SUPABASE_SERVICE_ROLE_KEY not set, using anon key for server operations")
+
 logger.info("Supabase client initialized successfully")
 
 # ============================================================================
@@ -480,6 +502,13 @@ def chat_endpoint(req: ChatRequest, supabase_client: Client = Depends(get_supaba
 
         # Update thread timestamp
         update_thread_timestamp(thread_id, supabase_client)
+
+        # Social integration - check for auto-posts
+        try:
+            social_integration = SocialIntegration(supabase_client)
+            social_integration.check_and_create_auto_posts(req.user_name, user)
+        except Exception as e:
+            logger.warning(f"Social integration failed for {req.user_name}: {str(e)}")
 
         return ChatResponse(
             response=response,
@@ -2231,4 +2260,593 @@ def create_partner(partner: CreatePartnerRequest, supabase_client: Client = Depe
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create partner"
+        )
+
+# ============================================================================
+# Social Features Endpoints
+# ============================================================================
+
+def get_social_service(supabase_client: Client = Depends(get_supabase)) -> SocialService:
+    """Dependency to get social service."""
+    return SocialService(supabase_client)
+
+def get_social_service_with_service_role() -> SocialService:
+    """Dependency to get social service with service role (bypasses RLS)."""
+    if SUPABASE_SERVICE_ROLE_KEY:
+        service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        return SocialService(service_client)
+    else:
+        # Fallback to regular client
+        return SocialService(supabase)
+
+@app.post("/social/posts", response_model=PostResponse, status_code=201)
+def create_social_post(
+    post_data: CreatePostRequest,
+    user_name: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Create a new social post."""
+    try:
+        return social_service.create_post(user_name, post_data)
+    except Exception as e:
+        logger.error(f"Error creating social post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create social post"
+        )
+
+@app.get("/social/posts/{post_id}", response_model=PostResponse)
+def get_social_post(
+    post_id: str,
+    user_name: Optional[str] = None,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get a specific social post."""
+    try:
+        post = social_service.get_post(post_id, user_name)
+        if not post:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Post not found"
+            )
+        return post
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting social post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get social post"
+        )
+
+@app.delete("/social/posts/{post_id}")
+def delete_social_post(
+    post_id: str,
+    user_name: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Delete a social post."""
+    try:
+        success = social_service.delete_post(post_id, user_name)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to delete this post"
+            )
+        return {"message": "Post deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting social post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete social post"
+        )
+
+@app.get("/social/feed", response_model=NewsFeedResponse)
+def get_news_feed(
+    user_name: str,
+    page: int = 1,
+    limit: int = 20,
+    post_types: Optional[List[str]] = None,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get personalized news feed."""
+    try:
+        from src.social_models import PostType
+        post_type_enums = None
+        if post_types:
+            post_type_enums = [PostType(pt) for pt in post_types if pt in [p.value for p in PostType]]
+        
+        request = NewsFeedRequest(page=page, limit=limit, post_types=post_type_enums)
+        return social_service.get_news_feed(user_name, request)
+    except Exception as e:
+        logger.error(f"Error getting news feed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get news feed"
+        )
+
+@app.post("/social/posts/{post_id}/like")
+def like_post(
+    post_id: str,
+    user_name: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Like or unlike a post."""
+    try:
+        is_liked = social_service.like_post(post_id, user_name)
+        return {"liked": is_liked, "message": "Post liked" if is_liked else "Post unliked"}
+    except Exception as e:
+        logger.error(f"Error liking post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to like post"
+        )
+
+@app.post("/social/posts/{post_id}/comments", response_model=CommentResponse, status_code=201)
+def comment_on_post(
+    post_id: str,
+    user_name: str,
+    comment_data: CommentRequest,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Add a comment to a post."""
+    try:
+        return social_service.comment_on_post(post_id, user_name, comment_data)
+    except Exception as e:
+        logger.error(f"Error commenting on post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to add comment"
+        )
+
+@app.get("/social/posts/{post_id}/comments", response_model=List[CommentResponse])
+def get_post_comments(
+    post_id: str,
+    user_name: Optional[str] = None,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get comments for a post."""
+    try:
+        return social_service.get_post_comments(post_id, user_name)
+    except Exception as e:
+        logger.error(f"Error getting post comments: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get post comments"
+        )
+
+@app.post("/social/users/{target_user}/follow")
+def follow_user(
+    target_user: str,
+    user_name: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Follow or unfollow a user."""
+    try:
+        is_following = social_service.follow_user(user_name, target_user)
+        return {"following": is_following, "message": "User followed" if is_following else "User unfollowed"}
+    except Exception as e:
+        logger.error(f"Error following user: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to follow user"
+        )
+
+@app.get("/social/users/{target_user}/followers")
+def get_user_followers(
+    target_user: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get user's followers."""
+    try:
+        followers = social_service.get_user_followers(target_user)
+        return {"followers": followers, "count": len(followers)}
+    except Exception as e:
+        logger.error(f"Error getting user followers: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get user followers"
+        )
+
+@app.get("/social/users/{target_user}/following")
+def get_user_following(
+    target_user: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get users that user is following."""
+    try:
+        following = social_service.get_user_following(target_user)
+        return {"following": following, "count": len(following)}
+    except Exception as e:
+        logger.error(f"Error getting user following: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get user following"
+        )
+
+@app.get("/social/users/{user_name}/points", response_model=PointsSummary)
+def get_user_points(
+    user_name: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get user's points summary."""
+    try:
+        return social_service.get_user_points(user_name)
+    except Exception as e:
+        logger.error(f"Error getting user points: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get user points"
+        )
+
+@app.post("/social/users/{user_id}/points")
+def award_points_to_user(
+    user_id: str,
+    request: dict,
+    social_service: SocialService = Depends(get_social_service_with_service_role)
+):
+    """Award points to a user by UUID."""
+    try:
+        points = request.get("points", 0)
+        reason = request.get("reason", "Points awarded")
+        activity_type = request.get("activity_type", "manual")
+        metadata = request.get("metadata", {})
+        
+        result = social_service.award_points_to_user_by_id(
+            user_id=user_id,
+            points=points,
+            reason=reason,
+            activity_type=activity_type,
+            metadata=metadata
+        )
+        
+        # Check if the operation was successful
+        if not result.get("success", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=result.get("error", "Failed to award points")
+            )
+        
+        return {
+            "success": True,
+            "points": points,
+            "user_name": user_name,
+            "reason": reason,
+            "activity_type": activity_type,
+            "metadata": metadata,
+            "total_points": result.get("total_points", 0),
+            "level": result.get("level", 1),
+            "level_up": result.get("level_up", False)
+        }
+    except Exception as e:
+        logger.error(f"Error awarding points to {user_name}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to award points: {str(e)}"
+        )
+
+@app.get("/social/users/{user_name}/achievements")
+def get_user_achievements(
+    user_name: str,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get user's achievements."""
+    try:
+        achievements = social_service.get_user_achievements(user_name)
+        return {"achievements": achievements, "count": len(achievements)}
+    except Exception as e:
+        logger.error(f"Error getting user achievements: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get user achievements"
+        )
+
+@app.get("/social/leaderboard", response_model=LeaderboardResponse)
+def get_leaderboard(
+    user_name: str,
+    limit: int = 50,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get leaderboard."""
+    try:
+        return social_service.get_leaderboard(user_name, limit)
+    except Exception as e:
+        logger.error(f"Error getting leaderboard: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get leaderboard"
+        )
+
+@app.get("/social/users/{target_user}/profile", response_model=SocialUserProfileResponse)
+def get_social_user_profile(
+    target_user: str,
+    current_user: Optional[str] = None,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Get social user profile with social data."""
+    try:
+        # Get basic user profile
+        user_response = supabase.table("profiles").select("*").eq("user_name", target_user).execute()
+        if not user_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        user = user_response.data[0]
+        
+        # Get social data
+        points = social_service.get_user_points(target_user)
+        followers = social_service.get_user_followers(target_user)
+        following = social_service.get_user_following(target_user)
+        
+        # Get posts count
+        posts_response = supabase.table("social_posts").select("count", count="exact").eq("user_name", target_user).eq("is_active", True).execute()
+        posts_count = posts_response.count if posts_response.count else 0
+        
+        # Check if current user is following this user
+        is_following = False
+        if current_user:
+            following_list = social_service.get_user_following(current_user)
+            is_following = target_user in following_list
+        
+        return SocialUserProfileResponse(
+            user_name=user["user_name"],
+            first_name=user.get("first_name"),
+            last_name=user.get("last_name"),
+            avatar_url=user.get("avatar_url"),
+            bio=user.get("bio"),
+            total_points=points.total_points,
+            level=points.level,
+            badges=points.badges,
+            followers_count=len(followers),
+            following_count=len(following),
+            posts_count=posts_count,
+            is_following=is_following
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting social user profile: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get social user profile"
+        )
+
+# ============================================================================
+# Smart Feed Endpoints
+# ============================================================================
+
+def get_smart_feed_service(supabase_client: Client = Depends(get_supabase)) -> SmartFeedService:
+    """Dependency to get smart feed service."""
+    return SmartFeedService(supabase_client)
+
+@app.get("/social/smart-feed", response_model=SmartFeedResponse)
+def get_smart_feed(
+    user_name: str,
+    page: int = 1,
+    limit: int = 20,
+    post_types: Optional[List[str]] = None,
+    level_filter: Optional[str] = None,
+    language_filter: Optional[str] = None,
+    include_trending: bool = True,
+    include_level_peers: bool = True,
+    include_study_groups: bool = True,
+    personalization_score: float = 0.7,
+    smart_feed_service: SmartFeedService = Depends(get_smart_feed_service)
+):
+    """Get intelligent personalized feed with level-based filtering and trending content."""
+    try:
+        from src.social_models import PostType
+        post_type_enums = None
+        if post_types:
+            post_type_enums = [PostType(pt) for pt in post_types if pt in [p.value for p in PostType]]
+        
+        request = SmartFeedRequest(
+            page=page,
+            limit=limit,
+            post_types=post_type_enums,
+            level_filter=level_filter,
+            language_filter=language_filter,
+            include_trending=include_trending,
+            include_level_peers=include_level_peers,
+            include_study_groups=include_study_groups,
+            personalization_score=personalization_score
+        )
+        
+        return smart_feed_service.get_smart_feed(user_name, request)
+    except Exception as e:
+        logger.error(f"Error getting smart feed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get smart feed"
+        )
+
+@app.get("/social/trending-words")
+def get_trending_words(
+    language: str,
+    level: str,
+    limit: int = 20,
+    smart_feed_service: SmartFeedService = Depends(get_smart_feed_service)
+):
+    """Get trending words for specific language and level."""
+    try:
+        trending_words = smart_feed_service.get_trending_words(language, level, limit)
+        return {"trending_words": trending_words, "count": len(trending_words)}
+    except Exception as e:
+        logger.error(f"Error getting trending words: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get trending words"
+        )
+
+@app.get("/social/users/{user_name}/privacy-settings", response_model=UserPrivacySettings)
+def get_user_privacy_settings(
+    user_name: str,
+    smart_feed_service: SmartFeedService = Depends(get_smart_feed_service)
+):
+    """Get user privacy settings."""
+    try:
+        return smart_feed_service._get_user_privacy_settings(user_name)
+    except Exception as e:
+        logger.error(f"Error getting privacy settings: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get privacy settings"
+        )
+
+@app.put("/social/users/{user_name}/privacy-settings")
+def update_user_privacy_settings(
+    user_name: str,
+    settings: UserPrivacySettings,
+    smart_feed_service: SmartFeedService = Depends(get_smart_feed_service)
+):
+    """Update user privacy settings."""
+    try:
+        success = smart_feed_service.update_user_privacy_settings(user_name, settings)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to update privacy settings"
+            )
+        return {"message": "Privacy settings updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating privacy settings: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update privacy settings"
+        )
+
+# ============================================================================
+# Study Analytics Endpoints
+# ============================================================================
+
+def get_study_analytics_service(supabase_client: Client = Depends(get_supabase)) -> StudyAnalyticsService:
+    """Dependency to get study analytics service."""
+    return StudyAnalyticsService(supabase_client)
+
+@app.post("/study/record-word")
+def record_word_study(
+    user_name: str,
+    word: str,
+    language: str,
+    level: str,
+    study_type: str,
+    context: Optional[str] = None,
+    difficulty_score: Optional[float] = None,
+    study_analytics_service: StudyAnalyticsService = Depends(get_study_analytics_service)
+):
+    """Record a word being studied by a user."""
+    try:
+        success = study_analytics_service.record_word_study(
+            user_name, word, language, level, study_type, context, difficulty_score
+        )
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to record word study"
+            )
+        return {"message": "Word study recorded successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error recording word study: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to record word study"
+        )
+
+@app.get("/study/word-analytics/{word}")
+def get_word_analytics(
+    word: str,
+    language: str,
+    study_analytics_service: StudyAnalyticsService = Depends(get_study_analytics_service)
+):
+    """Get global analytics for a specific word."""
+    try:
+        analytics = study_analytics_service.get_global_word_analytics(word, language)
+        if not analytics:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Word analytics not found"
+            )
+        return analytics
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting word analytics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get word analytics"
+        )
+
+@app.get("/study/analytics", response_model=StudyAnalyticsResponse)
+def get_study_analytics(
+    language: str,
+    level: Optional[str] = None,
+    time_period: str = "today",
+    limit: int = 50,
+    user_name: Optional[str] = None,
+    study_analytics_service: StudyAnalyticsService = Depends(get_study_analytics_service)
+):
+    """Get comprehensive study analytics."""
+    try:
+        request = StudyAnalyticsRequest(
+            language=language,
+            level=level,
+            time_period=time_period,
+            limit=limit
+        )
+        return study_analytics_service.get_study_analytics(request, user_name)
+    except Exception as e:
+        logger.error(f"Error getting study analytics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get study analytics"
+        )
+
+@app.get("/study/trending-words")
+def get_trending_words(
+    language: str,
+    level: Optional[str] = None,
+    limit: int = 20,
+    study_analytics_service: StudyAnalyticsService = Depends(get_study_analytics_service)
+):
+    """Get trending words for a language and level."""
+    try:
+        trending_words = study_analytics_service.get_trending_words(language, level, limit)
+        return {"trending_words": trending_words, "count": len(trending_words)}
+    except Exception as e:
+        logger.error(f"Error getting trending words: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get trending words"
+        )
+
+@app.get("/study/users/{user_name}/insights", response_model=StudyInsights)
+def get_user_study_insights(
+    user_name: str,
+    study_analytics_service: StudyAnalyticsService = Depends(get_study_analytics_service)
+):
+    """Get study insights for a specific user."""
+    try:
+        insights = study_analytics_service.get_user_study_insights(user_name)
+        if not insights:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User study insights not found"
+            )
+        return insights
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting user study insights: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get user study insights"
         ) 
