@@ -4,6 +4,7 @@ Study Analytics Service - Global word study analytics and insights
 
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Tuple
 from collections import Counter
@@ -260,12 +261,19 @@ class StudyAnalyticsService:
             }
             
             # Check if user insights exist
-            existing_response = self.supabase.table("user_study_insights").select("*").eq("user_name", user_name).execute()
+            # Get user_id first
+            user_response = self.supabase.table("profiles").select("id").eq("user_name", user_name).execute()
+            if not user_response.data:
+                return
+            
+            user_id = user_response.data[0]["id"]
+            existing_response = self.supabase.table("user_study_insights").select("*").eq("user_id", user_id).execute()
             
             if existing_response.data:
-                self.supabase.table("user_study_insights").update(insights_data).eq("user_name", user_name).execute()
+                self.supabase.table("user_study_insights").update(insights_data).eq("user_id", user_id).execute()
             else:
                 insights_data["id"] = str(uuid.uuid4())
+                insights_data["user_id"] = user_id
                 self.supabase.table("user_study_insights").insert(insights_data).execute()
                 
         except Exception as e:
@@ -317,7 +325,13 @@ class StudyAnalyticsService:
     def _get_user_study_insights(self, user_name: str) -> Optional[StudyInsights]:
         """Get user study insights"""
         try:
-            response = self.supabase.table("user_study_insights").select("*").eq("user_name", user_name).execute()
+            # Get user_id first
+            user_response = self.supabase.table("profiles").select("id").eq("user_name", user_name).execute()
+            if not user_response.data:
+                return None
+            
+            user_id = user_response.data[0]["id"]
+            response = self.supabase.table("user_study_insights").select("*").eq("user_id", user_id).execute()
             
             if not response.data:
                 return None

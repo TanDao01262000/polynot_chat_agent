@@ -2268,7 +2268,12 @@ def create_partner(partner: CreatePartnerRequest, supabase_client: Client = Depe
 
 def get_social_service(supabase_client: Client = Depends(get_supabase)) -> SocialService:
     """Dependency to get social service."""
-    return SocialService(supabase_client)
+    # Use service role client for all social operations to bypass RLS
+    if SUPABASE_SERVICE_ROLE_KEY:
+        service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        return SocialService(service_client)
+    else:
+        return SocialService(supabase_client)
 
 def get_social_service_with_service_role() -> SocialService:
     """Dependency to get social service with service role (bypasses RLS)."""
@@ -2393,7 +2398,7 @@ def comment_on_post(
 ):
     """Add a comment to a post."""
     try:
-        return social_service.comment_on_post(post_id, user_name, comment_data)
+        return social_service.add_comment(user_name, post_id, comment_data)
     except Exception as e:
         logger.error(f"Error commenting on post: {str(e)}")
         raise HTTPException(

@@ -93,7 +93,10 @@ class SocialService:
             if not response.data:
                 return None
             
-            return self._format_post_response(response.data[0], current_user)
+            # Get the actual user_name from the post's user_id
+            post = response.data[0]
+            user_name = self._get_user_name(post["user_id"])
+            return self._format_post_response(post, user_name)
             
         except Exception as e:
             logger.error(f"Error getting post: {str(e)}")
@@ -142,24 +145,17 @@ class SocialService:
             query = self.supabase.table("social_posts").select("*").eq("is_active", True)
             
             # Apply filters
-            if request.post_type:
-                query = query.eq("post_type", request.post_type.value)
+            if request.post_types:
+                query = query.in_("post_type", [pt.value for pt in request.post_types])
             
-            if request.visibility:
-                query = query.eq("visibility", request.visibility.value)
-            
-            # Level-based filtering
-            if request.level_filter:
-                query = query.eq("visibility", "level_restricted")
+            # No visibility filter in NewsFeedRequest
             
             # Order by creation date
             query = query.order("created_at", desc=True)
             
             # Pagination
-            if request.offset:
-                query = query.range(request.offset, request.offset + request.limit - 1)
-            else:
-                query = query.limit(request.limit)
+            offset = (request.page - 1) * request.limit
+            query = query.range(offset, offset + request.limit - 1)
             
             response = query.execute()
             posts = response.data if response.data else []
@@ -170,10 +166,15 @@ class SocialService:
                 post_user_name = self._get_user_name(post["user_id"])
                 formatted_posts.append(self._format_post_response(post, post_user_name))
             
+            total_pages = max(1, (len(formatted_posts) + request.limit - 1) // request.limit)
+            has_next = request.page < total_pages
+            
             return NewsFeedResponse(
                 posts=formatted_posts,
-                total_count=len(formatted_posts),
-                has_more=len(formatted_posts) == request.limit
+                total_posts=len(formatted_posts),
+                current_page=request.page,
+                total_pages=total_pages,
+                has_next=has_next
             )
             
         except Exception as e:
@@ -538,23 +539,50 @@ class SocialService:
         try:
             user_id = self._get_user_id(user_name)
             if not user_id:
-                return PointsSummary(total_points=0, available_points=0, level=1, badges=[])
+                return PointsSummary(
+                    total_points=0, 
+                    available_points=0, 
+                    redeemed_points=0,
+                    level=1, 
+                    next_level_points=100,
+                    badges=[]
+                )
             
             response = self.supabase.table("user_points").select("*").eq("user_id", user_id).execute()
             if not response.data:
-                return PointsSummary(total_points=0, available_points=0, level=1, badges=[])
+                return PointsSummary(
+                    total_points=0, 
+                    available_points=0, 
+                    redeemed_points=0,
+                    level=1, 
+                    next_level_points=100,
+                    badges=[]
+                )
             
             points_data = response.data[0]
+            total_points = points_data["total_points"]
+            level = points_data["level"]
+            next_level_points = (level + 1) * 100  # Calculate points needed for next level
+            
             return PointsSummary(
-                total_points=points_data["total_points"],
+                total_points=total_points,
                 available_points=points_data["available_points"],
-                level=points_data["level"],
+                redeemed_points=points_data.get("redeemed_points", 0),
+                level=level,
+                next_level_points=next_level_points,
                 badges=points_data.get("badges", [])
             )
             
         except Exception as e:
             logger.error(f"Error getting user points: {str(e)}")
-            return PointsSummary(total_points=0, available_points=0, level=1, badges=[])
+            return PointsSummary(
+                total_points=0, 
+                available_points=0, 
+                redeemed_points=0,
+                level=1, 
+                next_level_points=100,
+                badges=[]
+            )
     
     def get_leaderboard(self, user_name: str, limit: int = 10) -> LeaderboardResponse:
         """Get leaderboard"""
@@ -570,7 +598,10 @@ class SocialService:
                         rank=i,
                         user_name=user_name_from_id,
                         total_points=user_points["total_points"],
-                        level=user_points["level"]
+                        level=user_points["level"],
+                        badges=user_points.get("badges", []),
+                        streak_days=user_points.get("streak_days", 0),
+                        avatar_url=user_points.get("avatar_url")
                     ))
             
             # Get current user's rank
@@ -592,7 +623,7 @@ class SocialService:
             
         except Exception as e:
             logger.error(f"Error getting leaderboard: {str(e)}")
-            return LeaderboardResponse(leaderboard=[], current_user_rank=None)
+            return LeaderboardResponse(entries=[], user_rank=None, total_users=0)
     
     # ============================================================================
     # Achievements
@@ -611,6 +642,7 @@ class SocialService:
             for achievement in response.data:
                 achievements.append(AchievementResponse(
                     id=achievement["id"],
+                    achievement_id=achievement.get("achievement_id", achievement["id"]),
                     achievement_name=achievement["achievement_name"],
                     description=achievement["description"],
                     points_earned=achievement["points_earned"],
@@ -774,6 +806,8 @@ class SocialService:
             comments_count=post.get("comments_count", 0),
             shares_count=post.get("shares_count", 0),
             points_earned=post.get("points_earned", 0),
+            is_liked=post.get("is_liked", False),
+            author_avatar=post.get("author_avatar"),
             metadata=post.get("metadata", {}),
             created_at=post["created_at"],
             updated_at=post["updated_at"]
