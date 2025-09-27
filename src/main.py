@@ -2517,7 +2517,7 @@ def award_points_to_user(
         return {
             "success": True,
             "points": points,
-            "user_name": user_name,
+            "user_id": user_id,
             "reason": reason,
             "activity_type": activity_type,
             "metadata": metadata,
@@ -2526,7 +2526,7 @@ def award_points_to_user(
             "level_up": result.get("level_up", False)
         }
     except Exception as e:
-        logger.error(f"Error awarding points to {user_name}: {str(e)}")
+        logger.error(f"Error awarding points to user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to award points: {str(e)}"
