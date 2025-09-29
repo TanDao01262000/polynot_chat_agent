@@ -221,9 +221,14 @@ class SocialService:
     def add_comment(self, user_name: str, post_id: str, comment_data: CommentRequest) -> CommentResponse:
         """Add a comment to a post"""
         try:
-            user_id = self._get_user_id(user_name)
-            if not user_id:
+            # Get user data and avatar in a single query
+            user_response = self.supabase.table("profiles").select("id, avatar_url").eq("user_name", user_name).execute()
+            if not user_response.data:
                 raise Exception(f"User {user_name} not found")
+            
+            user_data = user_response.data[0]
+            user_id = user_data["id"]
+            author_avatar = user_data.get("avatar_url")
             
             # Create comment record
             comment_id = str(uuid.uuid4())
@@ -236,26 +241,62 @@ class SocialService:
                 "updated_at": datetime.now().isoformat()
             }
             
-            response = self.supabase.table("post_comments").insert(comment_record).execute()
-            if not response.data:
+            # Insert comment and update post count in a single transaction
+            # First insert the comment
+            comment_response = self.supabase.table("post_comments").insert(comment_record).execute()
+            if not comment_response.data:
                 raise Exception("Failed to create comment")
             
-            # Update post comments count
-            self.supabase.table("social_posts").update({
-                "comments_count": self.supabase.table("social_posts").select("comments_count").eq("id", post_id).execute().data[0]["comments_count"] + 1
-            }).eq("id", post_id).execute()
+            # Update post comments count - get current count and increment
+            current_post = self.supabase.table("social_posts").select("comments_count").eq("id", post_id).execute()
+            if current_post.data:
+                current_count = current_post.data[0].get("comments_count", 0)
+                self.supabase.table("social_posts").update({
+                    "comments_count": current_count + 1
+                }).eq("id", post_id).execute()
             
             return CommentResponse(
                 id=comment_id,
-                post_id=post_id,
                 user_name=user_name,
                 content=comment_data.content,
-                created_at=datetime.now().isoformat()
+                likes_count=0,  # New comment starts with 0 likes
+                is_liked=False,  # Default to not liked
+                created_at=datetime.now().isoformat(),
+                author_avatar=author_avatar
             )
             
         except Exception as e:
             logger.error(f"Error adding comment: {str(e)}")
             raise
+    
+    def get_post_comments(self, post_id: str, current_user: Optional[str] = None) -> List[CommentResponse]:
+        """Get all comments for a post"""
+        try:
+            # Get comments for the post
+            response = self.supabase.table("post_comments").select(
+                "*, profiles!inner(user_name, avatar_url)"
+            ).eq("post_id", post_id).order("created_at", desc=False).execute()
+            
+            if not response.data:
+                return []
+            
+            comments = []
+            for comment in response.data:
+                comments.append(CommentResponse(
+                    id=comment["id"],
+                    user_name=comment["profiles"]["user_name"],
+                    content=comment["content"],
+                    likes_count=0,  # No likes functionality for now
+                    is_liked=False,  # No likes functionality for now
+                    created_at=comment["created_at"],
+                    author_avatar=comment["profiles"].get("avatar_url")
+                ))
+            
+            return comments
+            
+        except Exception as e:
+            logger.error(f"Error getting post comments: {str(e)}")
+            return []
     
     # ============================================================================
     # Social Connections
@@ -587,16 +628,19 @@ class SocialService:
     def get_leaderboard(self, user_name: str, limit: int = 10) -> LeaderboardResponse:
         """Get leaderboard"""
         try:
-            # Get top users by points
-            response = self.supabase.table("user_points").select("*").order("total_points", desc=True).limit(limit).execute()
+            # Get top users by points with user_name in a single JOIN query
+            response = self.supabase.table("user_points").select(
+                "*, profiles!inner(user_name)"
+            ).order("total_points", desc=True).limit(limit).execute()
             
             leaderboard = []
             for i, user_points in enumerate(response.data, 1):
-                user_name_from_id = self._get_user_name(user_points["user_id"])
-                if user_name_from_id:
+                # Extract user_name from the joined profiles data
+                user_name_from_join = user_points.get("profiles", {}).get("user_name")
+                if user_name_from_join:
                     leaderboard.append(LeaderboardEntry(
                         rank=i,
-                        user_name=user_name_from_id,
+                        user_name=user_name_from_join,
                         total_points=user_points["total_points"],
                         level=user_points["level"],
                         badges=user_points.get("badges", []),
@@ -604,21 +648,30 @@ class SocialService:
                         avatar_url=user_points.get("avatar_url")
                     ))
             
-            # Get current user's rank
+            # Get current user's rank using a more efficient approach
             current_user_rank = None
             if user_name:
-                current_user_id = self._get_user_id(user_name)
-                if current_user_id:
-                    # Get rank of current user
-                    all_users = self.supabase.table("user_points").select("*").order("total_points", desc=True).execute()
-                    for i, user_points in enumerate(all_users.data, 1):
-                        if user_points["user_id"] == current_user_id:
-                            current_user_rank = i
-                            break
+                # Get current user's points and rank in a single query
+                current_user_response = self.supabase.table("user_points").select(
+                    "total_points, profiles!inner(user_name)"
+                ).eq("profiles.user_name", user_name).execute()
+                
+                if current_user_response.data:
+                    current_user_points = current_user_response.data[0]["total_points"]
+                    # Count how many users have more points than current user
+                    rank_response = self.supabase.table("user_points").select(
+                        "id", count="exact"
+                    ).gt("total_points", current_user_points).execute()
+                    current_user_rank = (rank_response.count or 0) + 1
+            
+            # Get total users count
+            total_users_response = self.supabase.table("user_points").select("id", count="exact").execute()
+            total_users = total_users_response.count if total_users_response.count else 0
             
             return LeaderboardResponse(
-                leaderboard=leaderboard,
-                current_user_rank=current_user_rank
+                entries=leaderboard,
+                user_rank=current_user_rank,
+                total_users=total_users
             )
             
         except Exception as e:

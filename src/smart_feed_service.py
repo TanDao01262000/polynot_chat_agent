@@ -142,29 +142,24 @@ class SmartFeedService:
                                privacy_settings: UserPrivacySettings, request: SmartFeedRequest) -> List[Dict[str, Any]]:
         """Build intelligent query based on user level and preferences"""
         try:
-            # Get user's following list
-            following_response = self.supabase.table("user_follows").select("following_id").eq("follower_id", user_name).execute()
-            following_users = [f["following_id"] for f in following_response.data] if following_response.data else []
+            # Build optimized query using JOINs instead of multiple separate queries
+            query = self.supabase.table("social_posts").select(
+                "*, profiles!inner(user_name, user_level, target_language)"
+            ).eq("is_active", True)
             
-            # Add user's own posts
-            following_users.append(user_name)
+            # Add user's own posts and following
+            following_response = self.supabase.table("user_follows").select("following_user_name").eq("follower_user_name", user_name).execute()
+            following_users = [f["following_user_name"] for f in following_response.data] if following_response.data else []
+            following_users.append(user_name)  # Include user's own posts
             
-            # Build base query
-            query = self.supabase.table("social_posts").select("*").eq("is_active", True)
-            
-            # Level-based filtering
+            # Apply user filtering
             if request.include_level_peers and privacy_settings.allow_level_filtering:
-                # Get users at same level
-                level_peers_response = self.supabase.table("profiles").select("user_name").eq("user_level", user_profile["user_level"]).execute()
-                level_peers = [p["user_name"] for p in level_peers_response.data] if level_peers_response.data else []
-                
-                # Get users studying same language
-                language_peers_response = self.supabase.table("profiles").select("user_name").eq("target_language", user_profile["target_language"]).execute()
-                language_peers = [p["user_name"] for p in language_peers_response.data] if language_peers_response.data else []
-                
-                # Combine all relevant users
-                all_users = list(set(following_users + level_peers + language_peers))
-                query = query.in_("user_name", all_users)
+                # Use OR conditions for level and language peers
+                query = query.or_(
+                    f"user_name.in.({','.join(following_users)})",
+                    f"profiles.user_level.eq.{user_profile['user_level']}",
+                    f"profiles.target_language.eq.{user_profile['target_language']}"
+                )
             else:
                 query = query.in_("user_name", following_users)
             
@@ -175,17 +170,11 @@ class SmartFeedService:
             
             # Filter by language level
             if request.level_filter:
-                # Get users at specified level
-                level_users_response = self.supabase.table("profiles").select("user_name").eq("user_level", request.level_filter).execute()
-                level_users = [u["user_name"] for u in level_users_response.data] if level_users_response.data else []
-                query = query.in_("user_name", level_users)
+                query = query.eq("profiles.user_level", request.level_filter)
             
             # Filter by target language
             if request.language_filter:
-                # Get users studying specified language
-                lang_users_response = self.supabase.table("profiles").select("user_name").eq("target_language", request.language_filter).execute()
-                lang_users = [u["user_name"] for u in lang_users_response.data] if lang_users_response.data else []
-                query = query.in_("user_name", lang_users)
+                query = query.eq("profiles.target_language", request.language_filter)
             
             # Apply visibility filters
             visibility_filters = ["public"]
@@ -413,8 +402,8 @@ class SmartFeedService:
             likes_response = self.supabase.table("post_likes").select("post_id").eq("user_id", user_id).execute()
             liked_posts = [l["post_id"] for l in likes_response.data] if likes_response.data else []
             
-            # Get user's comments using user_name (this table uses user_name)
-            comments_response = self.supabase.table("post_comments").select("post_id").eq("user_name", user_name).execute()
+            # Get user's comments using user_id
+            comments_response = self.supabase.table("post_comments").select("post_id").eq("user_id", user_id).execute()
             commented_posts = [c["post_id"] for c in comments_response.data] if comments_response.data else []
             
             return {

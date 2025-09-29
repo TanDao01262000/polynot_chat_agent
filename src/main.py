@@ -1591,48 +1591,38 @@ def validate_token(authorization: str = Header(None)):
     """Validate JWT token and return user information."""
     try:
         if not authorization or not authorization.startswith("Bearer "):
-            return {
-                "valid": False,
-                "error": "Invalid authorization header"
-            }
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization header"
+            )
         
         token = authorization.split(" ")[1]
         
         # Validate JWT token with Supabase
-        try:
-            user_data = validate_jwt_token(token)
-            
-            # Format expires_at from timestamp
-            expires_at = None
-            if user_data.get("exp"):
-                expires_at = datetime.utcfromtimestamp(user_data["exp"]).isoformat() + "Z"
-            
-            return {
-                "valid": True,
-                "user": {
-                    "id": user_data["id"],
-                    "email": user_data["email"],
-                    "user_metadata": user_data["user_metadata"]
-                },
-                "expires_at": expires_at
-            }
-        except HTTPException as e:
-            return {
-                "valid": False,
-                "error": e.detail
-            }
-        except Exception as e:
-            return {
-                "valid": False,
-                "error": str(e)
-            }
-            
-    except Exception as e:
-        logger.error(f"Token validation error: {str(e)}")
+        user_data = validate_jwt_token(token)
+        
+        # Format expires_at from timestamp
+        expires_at = None
+        if user_data.get("exp"):
+            expires_at = datetime.utcfromtimestamp(user_data["exp"]).isoformat() + "Z"
+        
         return {
-            "valid": False,
-            "error": "Token validation failed"
+            "valid": True,
+            "user": {
+                "id": user_data["id"],
+                "email": user_data["email"],
+                "user_metadata": user_data["user_metadata"]
+            },
+            "expires_at": expires_at
         }
+    except HTTPException:
+        # Re-raise HTTPException to preserve status codes
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token validation failed: {str(e)}"
+        )
 
 @app.post("/auth/refresh")
 def refresh_token(refresh_data: dict, supabase_client: Client = Depends(get_supabase)):
