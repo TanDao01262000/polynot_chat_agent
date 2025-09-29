@@ -40,8 +40,15 @@ class SmartFeedService:
             # Get trending content
             trending_content = []
             if request.include_trending:
+                # Handle target_language as array - take first language
+                target_lang = user_profile["target_language"]
+                if isinstance(target_lang, list) and len(target_lang) > 0:
+                    target_lang = target_lang[0]
+                elif not isinstance(target_lang, str):
+                    target_lang = "English"  # fallback
+                
                 trending_content = self._get_trending_content(
-                    user_profile["target_language"], 
+                    target_lang, 
                     user_profile["user_level"]
                 )
             
@@ -95,25 +102,49 @@ class SmartFeedService:
     def _get_user_privacy_settings(self, user_name: str) -> UserPrivacySettings:
         """Get user privacy settings"""
         try:
-            response = self.supabase.table("user_privacy_settings").select("*").eq("user_name", user_name).execute()
+            # First get user_id from user_name
+            user_response = self.supabase.table("profiles").select("id").eq("user_name", user_name).execute()
+            if not user_response.data:
+                raise Exception(f"User {user_name} not found")
+            
+            user_id = user_response.data[0]["id"]
+            
+            # Query privacy settings using user_id
+            response = self.supabase.table("user_privacy_settings").select("*").eq("user_id", user_id).execute()
             if response.data:
-                return UserPrivacySettings(**response.data[0])
+                settings_data = response.data[0]
+                # Add user_name to the response data
+                settings_data["user_name"] = user_name
+                return UserPrivacySettings(**settings_data)
             else:
-                # Create default privacy settings
-                default_settings = UserPrivacySettings(user_name=user_name)
-                self.supabase.table("user_privacy_settings").insert(default_settings.dict()).execute()
-                return default_settings
+                # Return default settings if none exist
+                return UserPrivacySettings(
+                    user_name=user_name,
+                    show_posts_to_level="same",
+                    show_achievements=True,
+                    show_learning_progress=True,
+                    allow_level_filtering=True,
+                    study_group_visibility=True
+                )
         except Exception as e:
             logger.error(f"Error getting privacy settings: {str(e)}")
-            return UserPrivacySettings(user_name=user_name)
+            # Return default settings on error
+            return UserPrivacySettings(
+                user_name=user_name,
+                show_posts_to_level="same",
+                show_achievements=True,
+                show_learning_progress=True,
+                allow_level_filtering=True,
+                study_group_visibility=True
+            )
     
     def _build_intelligent_query(self, user_name: str, user_profile: Dict[str, Any], 
                                privacy_settings: UserPrivacySettings, request: SmartFeedRequest) -> List[Dict[str, Any]]:
         """Build intelligent query based on user level and preferences"""
         try:
             # Get user's following list
-            following_response = self.supabase.table("user_follows").select("following_user_name").eq("follower_user_name", user_name).execute()
-            following_users = [f["following_user_name"] for f in following_response.data] if following_response.data else []
+            following_response = self.supabase.table("user_follows").select("following_id").eq("follower_id", user_name).execute()
+            following_users = [f["following_id"] for f in following_response.data] if following_response.data else []
             
             # Add user's own posts
             following_users.append(user_name)
@@ -317,12 +348,19 @@ class SmartFeedService:
     def _get_user_learning_stats(self, user_name: str) -> Dict[str, Any]:
         """Get user's learning statistics for recommendations"""
         try:
+            # First get user_id from username
+            user_response = self.supabase.table("profiles").select("id").eq("user_name", user_name).execute()
+            if not user_response.data:
+                return {"threads": [], "posts": [], "total_messages": 0}
+            
+            user_id = user_response.data[0]["id"]
+            
             # Get user's conversation history
             threads_response = self.supabase.table("conversation_thread").select("*").eq("user_name", user_name).execute()
             threads = threads_response.data if threads_response.data else []
             
-            # Get user's posts
-            posts_response = self.supabase.table("social_posts").select("*").eq("user_name", user_name).execute()
+            # Get user's posts using user_id
+            posts_response = self.supabase.table("social_posts").select("*").eq("user_id", user_id).execute()
             posts = posts_response.data if posts_response.data else []
             
             return {
@@ -364,11 +402,18 @@ class SmartFeedService:
     def _get_user_interactions(self, user_name: str) -> Dict[str, Any]:
         """Get user's interaction history for personalization"""
         try:
-            # Get user's likes
-            likes_response = self.supabase.table("post_likes").select("post_id").eq("user_name", user_name).execute()
+            # First get user_id from username
+            user_response = self.supabase.table("profiles").select("id").eq("user_name", user_name).execute()
+            if not user_response.data:
+                return {"liked_posts": [], "commented_posts": [], "total_interactions": 0}
+            
+            user_id = user_response.data[0]["id"]
+            
+            # Get user's likes using user_id
+            likes_response = self.supabase.table("post_likes").select("post_id").eq("user_id", user_id).execute()
             liked_posts = [l["post_id"] for l in likes_response.data] if likes_response.data else []
             
-            # Get user's comments
+            # Get user's comments using user_name (this table uses user_name)
             comments_response = self.supabase.table("post_comments").select("post_id").eq("user_name", user_name).execute()
             commented_posts = [c["post_id"] for c in comments_response.data] if comments_response.data else []
             
@@ -414,10 +459,21 @@ class SmartFeedService:
     def update_user_privacy_settings(self, user_name: str, settings: UserPrivacySettings) -> bool:
         """Update user privacy settings"""
         try:
+            # First get user_id from user_name
+            user_response = self.supabase.table("profiles").select("id").eq("user_name", user_name).execute()
+            if not user_response.data:
+                return False
+            
+            user_id = user_response.data[0]["id"]
+            
             settings_dict = settings.dict()
             settings_dict["updated_at"] = datetime.now().isoformat()
+            settings_dict["user_id"] = user_id
+            # Remove user_name from the dict since the table uses user_id
+            if "user_name" in settings_dict:
+                del settings_dict["user_name"]
             
-            # Upsert privacy settings
+            # Upsert privacy settings using user_id
             self.supabase.table("user_privacy_settings").upsert(settings_dict).execute()
             
             return True

@@ -339,6 +339,14 @@ def get_supabase() -> Client:
     """Dependency to get Supabase client."""
     return supabase
 
+def get_supabase_service() -> Client:
+    """Dependency to get Supabase service role client for server operations."""
+    if SUPABASE_SERVICE_ROLE_KEY:
+        return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    else:
+        logger.warning("SUPABASE_SERVICE_ROLE_KEY not set, using anon key")
+        return supabase
+
 # ============================================================================
 # Updated Chat System Endpoints
 # ============================================================================
@@ -818,6 +826,54 @@ def migrate_user_profiles(supabase_client: Client = Depends(get_supabase)):
             detail="Failed to migrate user profiles"
         )
 
+@app.post("/migrate/social-features")
+def migrate_social_features(supabase_client: Client = Depends(get_supabase_service)):
+    """Initialize social features for existing users who don't have them."""
+    try:
+        # Get all existing users
+        users_response = supabase_client.table("profiles").select("id, user_name").execute()
+        users = users_response.data if users_response.data else []
+        
+        points_initialized = 0
+        privacy_initialized = 0
+        
+        for user in users:
+            user_id = user["id"]
+            user_name = user["user_name"]
+            
+            # Check if user has points record
+            points_response = supabase_client.table("user_points").select("id").eq("user_id", user_id).execute()
+            if not points_response.data:
+                try:
+                    create_initial_user_points(user_name, user_id, supabase_client)
+                    points_initialized += 1
+                except Exception as e:
+                    logger.error(f"Failed to initialize points for {user_name}: {str(e)}")
+            
+            # Check if user has privacy settings
+            privacy_response = supabase_client.table("user_privacy_settings").select("id").eq("user_id", user_id).execute()
+            if not privacy_response.data:
+                try:
+                    create_default_privacy_settings(user_name, user_id, supabase_client)
+                    privacy_initialized += 1
+                except Exception as e:
+                    logger.error(f"Failed to initialize privacy settings for {user_name}: {str(e)}")
+        
+        return {
+            "message": f"Social features migration completed",
+            "total_users": len(users),
+            "points_initialized": points_initialized,
+            "privacy_initialized": privacy_initialized,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error migrating social features: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to migrate social features"
+        )
+
 # ============================================================================
 # Enhanced Validation Functions
 # ============================================================================
@@ -1085,6 +1141,54 @@ def validate_jwt_token(token: str) -> Dict:
         )
 
 # ============================================================================
+# Social Features Initialization Functions
+# ============================================================================
+
+def create_initial_user_points(user_name: str, user_id: str, supabase_client: Client):
+    """Create initial points record for new user."""
+    try:
+        initial_points = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "total_points": 0,
+            "available_points": 0,
+            "redeemed_points": 0,
+            "level": 1,
+            "badges": [],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        supabase_client.table("user_points").insert(initial_points).execute()
+        logger.info(f"Created initial points record for user {user_name}")
+        
+    except Exception as e:
+        logger.error(f"Error creating points record for {user_name}: {str(e)}")
+        raise
+
+def create_default_privacy_settings(user_name: str, user_id: str, supabase_client: Client):
+    """Create default privacy settings for new user."""
+    try:
+        default_settings = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "show_posts_to_level": "same",
+            "show_achievements": True,
+            "show_learning_progress": True,
+            "allow_level_filtering": True,
+            "study_group_visibility": True,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        supabase_client.table("user_privacy_settings").insert(default_settings).execute()
+        logger.info(f"Created default privacy settings for user {user_name}")
+        
+    except Exception as e:
+        logger.error(f"Error creating privacy settings for {user_name}: {str(e)}")
+        raise
+
+# ============================================================================
 # Updated User Management Endpoints
 # ============================================================================
 
@@ -1145,7 +1249,7 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Failed to create authentication account"
+                    detail=f"Failed to create authentication account: {error_msg}"
                 )
         
         if not auth_response.user:
@@ -1155,16 +1259,16 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
             )
         
         # Prepare profile data with proper array handling
-        # Generate a UUID for the profiles table
-        import uuid
-        profile_id = str(uuid.uuid4())
+        # Use the same ID from the auth user
+        auth_user_id = auth_response.user.id
         # Log the user level being set
         logger.info(f"Creating user {validated_username} with level: {validated_user_level}")
         logger.info(f"Original user.user_level: {user.user_level}")
         logger.info(f"Validated user level: {validated_user_level}")
+        logger.info(f"Using auth user ID: {auth_user_id}")
         
         profile_data = {
-            "id": profile_id,
+            "id": auth_user_id,
             "user_name": validated_username,
             "user_level": validated_user_level,
             "target_language": [user.target_language] if user.target_language else [],
@@ -1188,26 +1292,62 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
             "updated_at": datetime.now().isoformat()
         }
         
-        # Insert into profiles table with simplified error handling
+        # Check if profile already exists (created by database trigger)
         response = None
         try:
-            logger.info(f"Inserting profile data: {profile_data}")
-            response = supabase_client.table("profiles").insert(profile_data).execute()
-            logger.info(f"Database insert completed successfully")
-            if response.data:
-                logger.info(f"Inserted user level in DB: {response.data[0].get('user_level')}")
+            # First check if profile already exists
+            existing_profile = supabase_client.table("profiles").select("*").eq("id", auth_user_id).execute()
+            
+            if existing_profile.data:
+                logger.info(f"Profile already exists for user {validated_username}, using existing profile")
+                response = existing_profile
+            else:
+                logger.info(f"Inserting profile data: {profile_data}")
+                response = supabase_client.table("profiles").insert(profile_data).execute()
+                logger.info(f"Database insert completed successfully")
+                if response.data:
+                    logger.info(f"Inserted user level in DB: {response.data[0].get('user_level')}")
         except Exception as db_error:
             error_msg = str(db_error)
             logger.error(f"Database error creating profile: {error_msg}")
             
-            # For now, just log the error and continue
-            # The user might have been created successfully despite the error
-            logger.warning(f"Database error occurred, but user might have been created: {error_msg}")
+            # Check if profile was created by trigger despite the error
+            try:
+                existing_profile = supabase_client.table("profiles").select("*").eq("id", auth_user_id).execute()
+                if existing_profile.data:
+                    logger.info(f"Profile was created by database trigger, using existing profile")
+                    response = existing_profile
+                else:
+                    logger.warning(f"Database error occurred, but user might have been created: {error_msg}")
+            except Exception as check_error:
+                logger.error(f"Error checking for existing profile: {str(check_error)}")
+                logger.warning(f"Database error occurred, but user might have been created: {error_msg}")
             
             # Don't raise an exception - let's check if the user was actually created
         
         # Check if we have a valid response
         if response and response.data:
+            logger.info(f"Profile data retrieved successfully for user {validated_username}")
+        else:
+            # If no response data, the user might be unverified
+            # Try to get the profile anyway
+            logger.warning(f"No response data for user {validated_username}, checking if profile exists...")
+            try:
+                response = supabase_client.table("profiles").select("*").eq("id", auth_user_id).execute()
+                if response.data:
+                    logger.info(f"Profile found for unverified user {validated_username}")
+                else:
+                    logger.error(f"No profile found for user {validated_username}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create user profile. Please check your email and verify your account."
+                    )
+            except Exception as profile_error:
+                logger.error(f"Error retrieving profile: {str(profile_error)}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to create user profile. Please check your email and verify your account."
+                )
             logger.info(f"Response data length: {len(response.data)}")
             logger.info(f"First item in response data: {response.data[0]}")
             logger.info(f"User level stored in database: {response.data[0]['user_level']}")
@@ -1232,6 +1372,9 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
                 except Exception as update_error:
                     logger.error(f"Error updating user level: {str(update_error)}")
             
+            # Social features are automatically initialized by database trigger
+            logger.info(f"Social features will be automatically initialized by database trigger for user {validated_username}")
+            
             # Return the user data in the expected format
             user_data = {
                 "id": response.data[0]["id"],
@@ -1253,45 +1396,45 @@ def create_user(user: User, supabase_client: Client = Depends(get_supabase)):
             }
             logger.info(f"Successfully created user: {validated_username} with ID: {response.data[0]['id']}")
             return user_data
-        else:
-            # If no response data, try to fetch the user from database to confirm creation
-            logger.warning(f"No response data, checking if user was created anyway...")
-            try:
-                # Try to fetch the user we just tried to create
-                fetch_response = supabase_client.table("profiles").select("*").eq("user_name", validated_username).execute()
-                if fetch_response.data:
-                    logger.info(f"User was created successfully despite no response data!")
-                    user_data = fetch_response.data[0]
-                    return {
-                        "id": user_data["id"],
-                        "user_name": user_data["user_name"],
-                        "user_level": validated_user_level,
-                        "target_language": user_data["target_language"][0] if user_data["target_language"] else user.target_language,
-                        "email": user_data.get("email"),
-                        "first_name": user_data.get("first_name"),
-                        "last_name": user_data.get("last_name"),
-                        "native_language": user_data.get("native_language"),
-                        "country": user_data.get("country"),
-                        "interests": user_data.get("interests", []),
-                        "bio": user_data.get("bio"),
-                        "learning_goals": user_data.get("learning_goals"),
-                        "preferred_topics": user_data.get("preferred_topics", []),
-                        "study_time_preference": user_data.get("study_time_preference"),
-                        "avatar_url": user_data.get("avatar_url"),
-                        "created_at": user_data["created_at"]
-                    }
-                else:
-                    logger.error(f"User was not created and no response data available")
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to create user profile"
-                    )
-            except Exception as fetch_error:
-                logger.error(f"Error fetching user after creation attempt: {fetch_error}")
+        
+        # If no response data, try to fetch the user from database to confirm creation
+        logger.warning(f"No response data, checking if user was created anyway...")
+        try:
+            # Try to fetch the user we just tried to create
+            fetch_response = supabase_client.table("profiles").select("*").eq("user_name", validated_username).execute()
+            if fetch_response.data:
+                logger.info(f"User was created successfully despite no response data!")
+                user_data = fetch_response.data[0]
+                return {
+                    "id": user_data["id"],
+                    "user_name": user_data["user_name"],
+                    "user_level": validated_user_level,
+                    "target_language": user_data["target_language"][0] if user_data["target_language"] else user.target_language,
+                    "email": user_data.get("email"),
+                    "first_name": user_data.get("first_name"),
+                    "last_name": user_data.get("last_name"),
+                    "native_language": user_data.get("native_language"),
+                    "country": user_data.get("country"),
+                    "interests": user_data.get("interests", []),
+                    "bio": user_data.get("bio"),
+                    "learning_goals": user_data.get("learning_goals"),
+                    "preferred_topics": user_data.get("preferred_topics", []),
+                    "study_time_preference": user_data.get("study_time_preference"),
+                    "avatar_url": user_data.get("avatar_url"),
+                    "created_at": user_data["created_at"]
+                }
+            else:
+                logger.error(f"User was not created and no response data available")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to create user profile"
                 )
+        except Exception as fetch_error:
+            logger.error(f"Error fetching user after creation attempt: {fetch_error}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create user profile"
+            )
             
     except HTTPException:
         raise
@@ -1341,10 +1484,20 @@ def login_user(login_data: UserLogin, supabase_client: Client = Depends(get_supa
         
         if expires_at:
             try:
-                # Parse the expires_at timestamp and calculate seconds until expiration
-                exp_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-                now = datetime.now(exp_datetime.tzinfo)
-                expires_in = int((exp_datetime - now).total_seconds())
+                # Handle both string and integer timestamps
+                if isinstance(expires_at, str):
+                    # Parse the expires_at timestamp and calculate seconds until expiration
+                    exp_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                    now = datetime.now(exp_datetime.tzinfo)
+                    expires_in = int((exp_datetime - now).total_seconds())
+                elif isinstance(expires_at, (int, float)):
+                    # Handle Unix timestamp
+                    exp_datetime = datetime.fromtimestamp(expires_at)
+                    now = datetime.now()
+                    expires_in = int((exp_datetime - now).total_seconds())
+                else:
+                    expires_in = 3600  # Default to 1 hour
+                
                 # Ensure it's not negative
                 expires_in = max(expires_in, 0)
             except Exception as e:
@@ -2588,7 +2741,7 @@ def get_social_user_profile(
         following = social_service.get_user_following(target_user)
         
         # Get posts count
-        posts_response = supabase.table("social_posts").select("count", count="exact").eq("user_name", target_user).eq("is_active", True).execute()
+        posts_response = supabase.table("social_posts").select("count", count="exact").eq("user_id", target_user).eq("is_active", True).execute()
         posts_count = posts_response.count if posts_response.count else 0
         
         # Check if current user is following this user
