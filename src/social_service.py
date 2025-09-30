@@ -166,6 +166,46 @@ class SocialService:
             logger.error(f"Error getting post: {str(e)}")
             return None
     
+    def update_post(self, post_id: str, user_name: str, update_data: Dict[str, Any]) -> Optional[PostResponse]:
+        """Update a post (only by owner)"""
+        try:
+            user_id = self._get_user_id(user_name)
+            if not user_id:
+                return None
+            
+            # Check if user owns the post
+            post_response = self.supabase.table("social_posts").select("user_id").eq("id", post_id).eq("is_active", True).execute()
+            if not post_response.data or post_response.data[0]["user_id"] != user_id:
+                return None
+            
+            # Prepare update data
+            update_fields = {
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            # Only update fields that are provided
+            if "title" in update_data:
+                update_fields["title"] = update_data["title"]
+            if "content" in update_data:
+                update_fields["content"] = update_data["content"]
+            if "visibility" in update_data:
+                update_fields["visibility"] = update_data["visibility"]
+            if "metadata" in update_data:
+                update_fields["metadata"] = update_data["metadata"]
+            
+            # Update the post
+            response = self.supabase.table("social_posts").update(update_fields).eq("id", post_id).execute()
+            if not response.data:
+                return None
+            
+            # Return updated post
+            updated_post = response.data[0]
+            return self._format_post_response(updated_post, user_name)
+            
+        except Exception as e:
+            logger.error(f"Error updating post: {str(e)}")
+            return None
+
     def delete_post(self, post_id: str, user_name: str) -> bool:
         """Delete a post (soft delete)"""
         try:

@@ -30,7 +30,7 @@ from src.models import (
 from src.feedback_tool import feedback_tool
 from src.level_evaluator_tool import level_evaluator_tool
 from src.social_models import (
-    CreatePostRequest, PostResponse, CommentRequest, CommentResponse,
+    CreatePostRequest, UpdatePostRequest, PostResponse, CommentRequest, CommentResponse,
     NewsFeedRequest, NewsFeedResponse, SocialUserProfileResponse,
     FollowRequest, PointsSummary, LeaderboardResponse,
     SmartFeedRequest, SmartFeedResponse, UserPrivacySettings, TrendingContent,
@@ -2479,6 +2479,55 @@ def get_social_post(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get social post"
+        )
+
+@app.put("/social/posts/{post_id}", response_model=PostResponse)
+def update_social_post(
+    post_id: str,
+    user_name: str,
+    update_data: UpdatePostRequest,
+    social_service: SocialService = Depends(get_social_service)
+):
+    """Update a social post (only by owner)."""
+    try:
+        # Convert UpdatePostRequest to dict, excluding None values
+        update_dict = update_data.dict(exclude_unset=True)
+        
+        # Validate that at least one field is being updated
+        if not update_dict:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one field must be provided for update"
+            )
+        
+        # Validate content if provided
+        if "content" in update_dict and (not update_dict["content"] or not update_dict["content"].strip()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Post content cannot be empty"
+            )
+        
+        # Validate title if provided
+        if "title" in update_dict and (not update_dict["title"] or not update_dict["title"].strip()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Post title cannot be empty"
+            )
+        
+        updated_post = social_service.update_post(post_id, user_name, update_dict)
+        if not updated_post:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this post or post not found"
+            )
+        return updated_post
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating social post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update social post"
         )
 
 @app.delete("/social/posts/{post_id}")

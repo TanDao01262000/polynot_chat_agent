@@ -39,6 +39,13 @@ class CreatePostRequest(SQLModel):
     visibility: PostVisibility = Field(default=PostVisibility.PUBLIC, description="Post visibility")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional post metadata")
 
+class UpdatePostRequest(SQLModel):
+    """Request model for updating a social post"""
+    title: Optional[str] = Field(default=None, description="Updated post title")
+    content: Optional[str] = Field(default=None, description="Updated post content")
+    visibility: Optional[PostVisibility] = Field(default=None, description="Updated post visibility")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Updated post metadata")
+
 class PostResponse(SQLModel):
     """Response model for social posts"""
     id: str = Field(description="Post ID")
