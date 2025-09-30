@@ -21,13 +21,36 @@ class SocialService:
     
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client
+        # Cache for user ID lookups to avoid repeated database queries
+        self._user_id_cache = {}
     
     def _get_user_id(self, user_name: str) -> Optional[str]:
-        """Get user_id from user_name"""
+        """Get user_id from user_name with caching and case-insensitive lookup"""
+        # Check cache first
+        if user_name in self._user_id_cache:
+            return self._user_id_cache[user_name]
+        
         try:
+            # First try exact match
             response = self.supabase.table("profiles").select("id").eq("user_name", user_name).execute()
             if response.data:
-                return response.data[0]["id"]
+                user_id = response.data[0]["id"]
+                # Cache the result
+                self._user_id_cache[user_name] = user_id
+                return user_id
+            
+            # If no exact match, try case-insensitive lookup
+            response = self.supabase.table("profiles").select("id, user_name").ilike("user_name", user_name).execute()
+            if response.data:
+                user_id = response.data[0]["id"]
+                actual_user_name = response.data[0]["user_name"]
+                # Cache with both the actual and requested username
+                self._user_id_cache[actual_user_name] = user_id
+                self._user_id_cache[user_name] = user_id
+                return user_id
+            
+            # Cache None for non-existent users to avoid repeated queries
+            self._user_id_cache[user_name] = None
             return None
         except Exception as e:
             logger.error(f"Error getting user_id for {user_name}: {str(e)}")
@@ -44,16 +67,47 @@ class SocialService:
             logger.error(f"Error getting user_name for {user_id}: {str(e)}")
             return None
     
+    def _get_user_data(self, user_name: str) -> Optional[Dict[str, Any]]:
+        """Get user data (id, avatar_url, user_level) in a single query with case-insensitive lookup"""
+        try:
+            # First try exact match
+            response = self.supabase.table("profiles").select("id, avatar_url, user_level").eq("user_name", user_name).execute()
+            if response.data:
+                user_data = response.data[0]
+                # Cache the user_id
+                self._user_id_cache[user_name] = user_data["id"]
+                return user_data
+            
+            # If no exact match, try case-insensitive lookup
+            response = self.supabase.table("profiles").select("id, avatar_url, user_level, user_name").ilike("user_name", user_name).execute()
+            if response.data:
+                user_data = response.data[0]
+                actual_user_name = user_data["user_name"]
+                # Cache with the actual username
+                self._user_id_cache[actual_user_name] = user_data["id"]
+                self._user_id_cache[user_name] = user_data["id"]  # Also cache with requested name
+                return user_data
+            
+            # Cache None for non-existent users
+            self._user_id_cache[user_name] = None
+            return None
+        except Exception as e:
+            logger.error(f"Error getting user data for {user_name}: {str(e)}")
+            return None
+    
     # ============================================================================
     # Post Management
     # ============================================================================
     
-    def create_post(self, user_name: str, post_data: CreatePostRequest) -> PostResponse:
+    def create_post(self, user_id: str, post_data: CreatePostRequest) -> PostResponse:
         """Create a new social post"""
         try:
-            user_id = self._get_user_id(user_name)
-            if not user_id:
-                raise Exception(f"User {user_name} not found")
+            # Validate user_id exists
+            user_response = self.supabase.table("profiles").select("user_name").eq("id", user_id).execute()
+            if not user_response.data:
+                raise Exception(f"User with ID {user_id} not found")
+            
+            user_name = user_response.data[0]["user_name"]
             
             # Create post
             post_id = str(uuid.uuid4())
@@ -74,11 +128,17 @@ class SocialService:
             if not response.data:
                 raise Exception("Failed to create post")
             
-            # Award points to user
-            self._award_points(user_name, "post_created", f"Created a {post_data.post_type.value} post", post_id)
+            # Award points to user (with error handling)
+            try:
+                self._award_points(user_name, "post_created", f"Created a {post_data.post_type.value} post", post_id)
+            except Exception as e:
+                logger.warning(f"Failed to award points for post creation: {str(e)}")
             
-            # Check for first post achievement
-            self._check_first_post_achievement(user_name)
+            # Check for first post achievement (with error handling)
+            try:
+                self._check_first_post_achievement(user_name)
+            except Exception as e:
+                logger.warning(f"Failed to check first post achievement: {str(e)}")
             
             return self._format_post_response(response.data[0], user_name)
             
@@ -89,13 +149,17 @@ class SocialService:
     def get_post(self, post_id: str, current_user: Optional[str] = None) -> Optional[PostResponse]:
         """Get a specific post"""
         try:
-            response = self.supabase.table("social_posts").select("*").eq("id", post_id).eq("is_active", True).execute()
+            response = self.supabase.table("social_posts").select(
+                "*, profiles!inner(user_name, avatar_url)"
+            ).eq("id", post_id).eq("is_active", True).execute()
             if not response.data:
                 return None
             
-            # Get the actual user_name from the post's user_id
+            # Get the actual user_name from the post's user_id via JOIN
             post = response.data[0]
-            user_name = self._get_user_name(post["user_id"])
+            user_name = post.get("profiles", {}).get("user_name", "Unknown")
+            # Add avatar_url to post data for _format_post_response
+            post["author_avatar"] = post.get("profiles", {}).get("avatar_url")
             return self._format_post_response(post, user_name)
             
         except Exception as e:
@@ -130,19 +194,29 @@ class SocialService:
     # News Feed
     # ============================================================================
     
-    def get_news_feed(self, user_name: str, request: NewsFeedRequest) -> NewsFeedResponse:
+    def get_news_feed(self, user_id: str, request: NewsFeedRequest) -> NewsFeedResponse:
         """Get personalized news feed for user"""
         try:
-            user_id = self._get_user_id(user_name)
-            if not user_id:
-                raise Exception(f"User {user_name} not found")
+            # Validate user_id exists and get user data in one query
+            user_response = self.supabase.table("profiles").select("user_name, user_level").eq("id", user_id).execute()
+            if not user_response.data:
+                # Return empty feed for non-existent users instead of throwing error
+                logger.warning(f"User with ID {user_id} not found, returning empty feed")
+                return NewsFeedResponse(
+                    posts=[],
+                    total_posts=0,
+                    current_page=request.page,
+                    total_pages=0,
+                    has_next=False
+                )
             
-            # Get user's level for filtering
-            user_response = self.supabase.table("profiles").select("user_level").eq("id", user_id).execute()
-            user_level = user_response.data[0]["user_level"] if user_response.data else "A1"
+            user_name = user_response.data[0]["user_name"]
+            user_level = user_response.data[0]["user_level"]
             
-            # Build query
-            query = self.supabase.table("social_posts").select("*").eq("is_active", True)
+            # Build query with JOIN to get user_name directly
+            query = self.supabase.table("social_posts").select(
+                "*, profiles!inner(user_name, avatar_url)"
+            ).eq("is_active", True)
             
             # Apply filters
             if request.post_types:
@@ -160,10 +234,12 @@ class SocialService:
             response = query.execute()
             posts = response.data if response.data else []
             
-            # Format posts
+            # Format posts using data from JOIN
             formatted_posts = []
             for post in posts:
-                post_user_name = self._get_user_name(post["user_id"])
+                post_user_name = post.get("profiles", {}).get("user_name", "Unknown")
+                # Add avatar_url to post data for _format_post_response
+                post["author_avatar"] = post.get("profiles", {}).get("avatar_url")
                 formatted_posts.append(self._format_post_response(post, post_user_name))
             
             total_pages = max(1, (len(formatted_posts) + request.limit - 1) // request.limit)
@@ -221,12 +297,11 @@ class SocialService:
     def add_comment(self, user_name: str, post_id: str, comment_data: CommentRequest) -> CommentResponse:
         """Add a comment to a post"""
         try:
-            # Get user data and avatar in a single query
-            user_response = self.supabase.table("profiles").select("id, avatar_url").eq("user_name", user_name).execute()
-            if not user_response.data:
+            # Get user data in a single optimized query
+            user_data = self._get_user_data(user_name)
+            if not user_data:
                 raise Exception(f"User {user_name} not found")
             
-            user_data = user_response.data[0]
             user_id = user_data["id"]
             author_avatar = user_data.get("avatar_url")
             
@@ -848,23 +923,44 @@ class SocialService:
     
     def _format_post_response(self, post: Dict[str, Any], user_name: str) -> PostResponse:
         """Format post data for response"""
-        return PostResponse(
-            id=post["id"],
-            user_name=user_name,
-            post_type=post["post_type"],
-            title=post["title"],
-            content=post["content"],
-            visibility=post["visibility"],
-            likes_count=post.get("likes_count", 0),
-            comments_count=post.get("comments_count", 0),
-            shares_count=post.get("shares_count", 0),
-            points_earned=post.get("points_earned", 0),
-            is_liked=post.get("is_liked", False),
-            author_avatar=post.get("author_avatar"),
-            metadata=post.get("metadata", {}),
-            created_at=post["created_at"],
-            updated_at=post["updated_at"]
-        )
+        try:
+            return PostResponse(
+                id=post["id"],
+                user_name=user_name,
+                post_type=post.get("post_type", "conversation"),
+                title=post.get("title", ""),
+                content=post.get("content", ""),
+                visibility=post.get("visibility", "public"),
+                likes_count=post.get("likes_count", 0),
+                comments_count=post.get("comments_count", 0),
+                shares_count=post.get("shares_count", 0),
+                points_earned=post.get("points_earned", 0),
+                is_liked=post.get("is_liked", False),
+                author_avatar=post.get("author_avatar"),
+                metadata=post.get("metadata", {}),
+                created_at=post.get("created_at", datetime.now().isoformat()),
+                updated_at=post.get("updated_at", datetime.now().isoformat())
+            )
+        except Exception as e:
+            logger.error(f"Error formatting post response: {str(e)}")
+            # Return a minimal response if formatting fails
+            return PostResponse(
+                id=post.get("id", ""),
+                user_name=user_name,
+                post_type=post.get("post_type", "conversation"),
+                title=post.get("title", ""),
+                content=post.get("content", ""),
+                visibility=post.get("visibility", "public"),
+                likes_count=0,
+                comments_count=0,
+                shares_count=0,
+                points_earned=0,
+                is_liked=False,
+                author_avatar=None,
+                metadata={},
+                created_at=post.get("created_at", datetime.now().isoformat()),
+                updated_at=post.get("updated_at", datetime.now().isoformat())
+            )
     
     def _award_points(self, user_name: str, activity: str, description: str, related_id: str = None):
         """Award points for an activity"""

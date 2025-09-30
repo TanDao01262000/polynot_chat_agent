@@ -2430,12 +2430,26 @@ def get_social_service_with_service_role() -> SocialService:
 @app.post("/social/posts", response_model=PostResponse, status_code=201)
 def create_social_post(
     post_data: CreatePostRequest,
-    user_name: str,
+    user_id: str,
     social_service: SocialService = Depends(get_social_service)
 ):
     """Create a new social post."""
     try:
-        return social_service.create_post(user_name, post_data)
+        # Validate required fields
+        if not post_data.title or not post_data.title.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Post title is required"
+            )
+        if not post_data.content or not post_data.content.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Post content is required"
+            )
+        
+        return social_service.create_post(user_id, post_data)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating social post: {str(e)}")
         raise HTTPException(
@@ -2493,7 +2507,7 @@ def delete_social_post(
 
 @app.get("/social/feed", response_model=NewsFeedResponse)
 def get_news_feed(
-    user_name: str,
+    user_id: str,
     page: int = 1,
     limit: int = 20,
     post_types: Optional[List[str]] = None,
@@ -2507,7 +2521,7 @@ def get_news_feed(
             post_type_enums = [PostType(pt) for pt in post_types if pt in [p.value for p in PostType]]
         
         request = NewsFeedRequest(page=page, limit=limit, post_types=post_type_enums)
-        return social_service.get_news_feed(user_name, request)
+        return social_service.get_news_feed(user_id, request)
     except Exception as e:
         logger.error(f"Error getting news feed: {str(e)}")
         raise HTTPException(
